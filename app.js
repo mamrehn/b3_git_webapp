@@ -44,8 +44,8 @@ const http = window.GitHttp || window.git?.http;
 let currentDir = '/home/student';
 let currentLine = '';
 let cursorPos = 0;
-let commandHistory = [];
-let historyIndex = -1;
+let commandHistory = ['git clone https://github.com/octocat/Hello-World.git'];
+let historyIndex = 1; // Start after the pre-filled command
 let currentProject = 'project1';
 let editorFile = null;
 let editorOriginalContent = '';
@@ -1142,15 +1142,9 @@ async function gitLog(args) {
         printNormal('');
         
         if (showOneline) {
-            // Git's standard color palette for graph
-            const graphColors = [
-                '\x1b[33m',  // Yellow
-                '\x1b[32m',  // Green
-                '\x1b[34m',  // Blue
-                '\x1b[36m',  // Cyan
-                '\x1b[31m',  // Red
-                '\x1b[35m',  // Magenta
-            ];
+            // White commit symbols, consistent with full graph view
+            const commitSymbolColor = '\x1b[37m';  // White for commit symbols (*)
+            const reset = '\x1b[0m';
             
             // Get all branch tips for decoration
             const branchTips = new Map();
@@ -1171,11 +1165,6 @@ async function gitLog(args) {
                 const shortHash = commit.oid.substring(0, 7);
                 const firstLine = commit.commit.message.split('\n')[0];
                 
-                // Use rotating colors for graph
-                const colorIndex = index % graphColors.length;
-                const color = graphColors[colorIndex];
-                const reset = '\x1b[0m';
-                
                 // Build decoration (standard git colors)
                 let decoration = '';
                 const decorParts = [];
@@ -1184,11 +1173,19 @@ async function gitLog(args) {
                     decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
                 }
                 
-                // Add other branches pointing to this commit
+                // Add other branches pointing to this commit (remove duplicates)
                 if (branchTips.has(commit.oid)) {
-                    const branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !index);
+                    let branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !index);
+                    // Remove duplicates
+                    branchNames = [...new Set(branchNames)];
+                    
                     branchNames.forEach(b => {
-                        decorParts.push(`\x1b[1;32m${b}\x1b[0m`);
+                        // Remote branches (origin/...) in red, local branches in green
+                        if (b.startsWith('origin/')) {
+                            decorParts.push(`\x1b[1;31m${b}\x1b[0m`);  // Bold red for remote branches
+                        } else {
+                            decorParts.push(`\x1b[1;32m${b}\x1b[0m`);  // Bold green for local branches
+                        }
                     });
                 }
                 
@@ -1197,22 +1194,31 @@ async function gitLog(args) {
                 }
                 
                 if (showGraph) {
-                    term.writeln(`${color}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                    // White star for all commits in oneline mode
+                    term.writeln(`${commitSymbolColor}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
                 } else {
                     term.writeln(`\x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
                 }
             });
         } else if (showGraph) {
             // Graph format with ASCII art - now supports branches!
-            // Git's standard color palette for graph (rotating colors for visual distinction)
+            // Git's standard rotating color palette for graph lines
             const graphColors = [
-                '\x1b[33m',  // Yellow (color 1)
-                '\x1b[32m',  // Green (color 2)
-                '\x1b[34m',  // Blue (color 3)
-                '\x1b[36m',  // Cyan (color 4)
-                '\x1b[31m',  // Red (color 5)
-                '\x1b[35m',  // Magenta (color 6)
+                '\x1b[31m',      // Red
+                '\x1b[32m',      // Green
+                '\x1b[33m',      // Yellow
+                '\x1b[34m',      // Blue
+                '\x1b[35m',      // Magenta
+                '\x1b[36m',      // Cyan
+                '\x1b[1;31m',    // Bold Red
+                '\x1b[1;32m',    // Bold Green
+                '\x1b[1;33m',    // Bold Yellow
+                '\x1b[1;34m',    // Bold Blue
+                '\x1b[1;35m',    // Bold Magenta
+                '\x1b[1;36m',    // Bold Cyan
             ];
+            const commitSymbolColor = '\x1b[37m';  // White for commit symbols (*)
+            const reset = '\x1b[0m';
             
             // Build commit map for parent lookup
             const commitMap = new Map();
@@ -1220,8 +1226,10 @@ async function gitLog(args) {
                 commitMap.set(commit.oid, commit);
             });
             
-            // Get all branch tips for decoration
+            // Get all branch tips for decoration (local and remote)
             const branchTips = new Map();
+            
+            // Add local branches
             for (const branch of branches) {
                 try {
                     const oid = await git.resolveRef({ fs, dir, ref: branch });
@@ -1234,16 +1242,46 @@ async function gitLog(args) {
                 }
             }
             
+            // Add remote branches
+            try {
+                const remoteBranches = await git.listBranches({ fs, dir, remote: 'origin' });
+                for (const branch of remoteBranches) {
+                    try {
+                        const oid = await git.resolveRef({ fs, dir, ref: `refs/remotes/origin/${branch}` });
+                        if (!branchTips.has(oid)) {
+                            branchTips.set(oid, []);
+                        }
+                        branchTips.get(oid).push(`origin/${branch}`);
+                    } catch (e) {
+                        // Ignore errors
+                    }
+                }
+                
+                // Add origin/HEAD if it exists
+                try {
+                    const headOid = await git.resolveRef({ fs, dir, ref: 'refs/remotes/origin/HEAD' });
+                    if (!branchTips.has(headOid)) {
+                        branchTips.set(headOid, []);
+                    }
+                    branchTips.get(headOid).push('origin/HEAD');
+                } catch (e) {
+                    // Ignore if origin/HEAD doesn't exist
+                }
+            } catch (e) {
+                // No remote branches
+            }
+            
             commits.forEach((commit, index) => {
                 const isFirst = index === 0;
                 const isLast = index === commits.length - 1;
-                const hasMergeParent = commit.commit.parent && commit.commit.parent.length > 1;
+                const parents = commit.commit.parent || [];
+                const isMerge = parents.length > 1;
                 const nextCommit = index < commits.length - 1 ? commits[index + 1] : null;
                 
-                // Use color based on commit depth for visual variety
-                const colorIndex = index % graphColors.length;
-                const color = graphColors[colorIndex];
-                const reset = '\x1b[0m';
+                // Use consistent colors: Red for main branch, Green for merged branch
+                // In complex histories, we would rotate, but for simple linear + merge, keep it consistent
+                const color = graphColors[0];  // Red for main branch
+                const secondColor = graphColors[1];  // Green for merged branch
                 
                 // Build decoration (standard git colors)
                 let decoration = '';
@@ -1254,12 +1292,19 @@ async function gitLog(args) {
                     decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
                 }
                 
-                // Add other branches pointing to this commit
+                // Add other branches pointing to this commit (remove duplicates and sort)
                 if (branchTips.has(commit.oid)) {
-                    const branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !isFirst);
+                    let branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !isFirst);
+                    // Remove duplicates
+                    branchNames = [...new Set(branchNames)];
+                    
                     branchNames.forEach(b => {
-                        // Branch names in bold green
-                        decorParts.push(`\x1b[1;32m${b}\x1b[0m`);
+                        // Remote branches (origin/...) in red, local branches in green
+                        if (b.startsWith('origin/')) {
+                            decorParts.push(`\x1b[1;31m${b}\x1b[0m`);  // Bold red for remote branches
+                        } else {
+                            decorParts.push(`\x1b[1;32m${b}\x1b[0m`);  // Bold green for local branches
+                        }
                     });
                 }
                 
@@ -1267,45 +1312,133 @@ async function gitLog(args) {
                     decoration = ` \x1b[33m(\x1b[0m${decorParts.join('\x1b[33m,\x1b[0m ')}\x1b[33m)\x1b[0m`;
                 }
                 
-                // Determine graph characters with appropriate color
-                let graphPrefix = `${color}*${reset}`;
-                let linePrefix = `${color}|${reset}`;
-                
                 // Check if this is a merge commit
-                if (hasMergeParent) {
-                    // After merge, show merge lines
-                    const nextLine = nextCommit ? `${color}|\\${reset}` : '  ';
+                if (isMerge) {
+                    // Find if the second parent is in our commit list
+                    const secondParentInList = parents.length > 1 && commitMap.has(parents[1]);
+                    const secondParentIndex = secondParentInList ? commits.findIndex(c => c.oid === parents[1]) : -1;
+                    const showBranchCommit = secondParentInList && secondParentIndex === index + 1;
                     
-                    // Commit line with merge indicator
-                    term.writeln(`${graphPrefix}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
-                    term.writeln(`${nextLine}   Merge: ${commit.commit.parent.map(p => p.substring(0, 7)).join(' ')}`);
-                    term.writeln(`${linePrefix}   Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                    // Merge commit header (white star)
+                    term.writeln(`${commitSymbolColor}*${reset}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
+                    // Merge line with graph branch split (|\ on same line as "Merge:")
+                    term.writeln(`${color}|\\${reset}  Merge: ${parents.map(p => p.substring(0, 7)).join(' ')}`);
+                    term.writeln(`${color}|${reset} ${secondColor}|${reset} Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                    
+                    // Format date properly
+                    const date = new Date(commit.commit.author.timestamp * 1000);
+                    const dateStr = date.toString();
+                    term.writeln(`${color}|${reset} ${secondColor}|${reset} Date:   ${dateStr}`);
+                    term.writeln(`${color}|${reset} ${secondColor}|${reset}`);
+                    
+                    // Handle multi-line commit messages
+                    const messageLines = commit.commit.message.trim().split('\n');
+                    messageLines.forEach((line, lineIndex) => {
+                        term.writeln(`${color}|${reset} ${secondColor}|${reset}     ${line}`);
+                    });
+                    term.writeln(`${color}|${reset} ${secondColor}|${reset}`);
+                    
+                    // If next commit is the second parent (merged branch commit)
+                    if (showBranchCommit) {
+                        // The next iteration will show this commit with proper prefix
+                        // We just continue the branch lines
+                    }
                 } else {
-                    // Regular commit
-                    term.writeln(`${graphPrefix}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
-                    term.writeln(`${isLast ? '  ' : linePrefix}   Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                    // Check if this is part of a merged branch
+                    const prevCommit = index > 0 ? commits[index - 1] : null;
+                    const isPrevMerge = prevCommit && prevCommit.commit.parent && prevCommit.commit.parent.length > 1;
+                    const isSecondParent = isPrevMerge && prevCommit.commit.parent.length > 1 && 
+                                          prevCommit.commit.parent[1] === commit.oid;
+                    
+                    if (isSecondParent) {
+                        // This is a commit from the merged branch
+                        // Check if there's another commit after this one
+                        const hasNextCommit = index < commits.length - 1;
+                        const nextIsLast = index === commits.length - 2;
+                        
+                        term.writeln(`${color}|${reset} ${commitSymbolColor}*${reset} \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
+                        term.writeln(`${color}|/${reset}  Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                        
+                        // Format date properly
+                        const date = new Date(commit.commit.author.timestamp * 1000);
+                        const dateStr = date.toString();
+                        
+                        // After |/ we continue with red line if there's more commits
+                        if (hasNextCommit) {
+                            term.writeln(`${color}|${reset}   Date:   ${dateStr}`);
+                            term.writeln(`${color}|${reset}`);
+                            
+                            // Handle multi-line commit messages
+                            const messageLines = commit.commit.message.trim().split('\n');
+                            messageLines.forEach(line => {
+                                term.writeln(`${color}|${reset}       ${line}`);
+                            });
+                            term.writeln(`${color}|${reset}`);
+                        } else {
+                            // Last commit - no more lines
+                            term.writeln(`   Date:   ${dateStr}`);
+                            term.writeln(``);
+                            
+                            // Handle multi-line commit messages
+                            const messageLines = commit.commit.message.trim().split('\n');
+                            messageLines.forEach(line => {
+                                term.writeln(`       ${line}`);
+                            });
+                            term.writeln(``);
+                        }
+                    } else {
+                        // Regular commit (not part of merge) - main branch
+                        const graphPrefix = `${commitSymbolColor}*${reset}`;
+                        const linePrefix = isLast ? '  ' : `${color}|${reset}`;
+                        
+                        term.writeln(`${graphPrefix}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
+                        term.writeln(`${linePrefix}   Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                        
+                        // Format date properly
+                        const date = new Date(commit.commit.author.timestamp * 1000);
+                        const dateStr = date.toString();
+                        term.writeln(`${linePrefix}   Date:   ${dateStr}`);
+                        term.writeln(`${linePrefix}`);
+                        
+                        // Handle multi-line commit messages
+                        const messageLines = commit.commit.message.trim().split('\n');
+                        messageLines.forEach(line => {
+                            term.writeln(`${linePrefix}       ${line}`);
+                        });
+                        
+                        term.writeln(isLast ? '' : linePrefix);
+                    }
                 }
-                
-                // Format date properly
-                const date = new Date(commit.commit.author.timestamp * 1000);
-                const dateStr = date.toString();
-                term.writeln(`${isLast ? '  ' : linePrefix}   Date:   ${dateStr}`);
-                term.writeln(`${isLast ? '  ' : linePrefix}`);
-                
-                // Handle multi-line commit messages
-                const messageLines = commit.commit.message.trim().split('\n');
-                messageLines.forEach(line => {
-                    term.writeln(`${isLast ? '  ' : linePrefix}       ${line}`);
-                });
-                
-                term.writeln(`${isLast ? '' : linePrefix}`);
             });
         } else {
             // Standard format
             commits.forEach((commit, index) => {
+                // Build decoration (standard git colors)
                 let decoration = '';
+                const decorParts = [];
+                
                 if (showDecorate && index === 0 && currentBranch) {
-                    decoration = ` \x1b[33m(\x1b[36mHEAD -> \x1b[32m${currentBranch}\x1b[33m)\x1b[0m`;
+                    decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
+                }
+                
+                // Add other branches pointing to this commit (remove duplicates)
+                if (branchTips.has(commit.oid)) {
+                    let branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !index);
+                    // Remove duplicates
+                    branchNames = [...new Set(branchNames)];
+                    
+                    branchNames.forEach(b => {
+                        // Remote branches (origin/...) in red, local branches in green
+                        if (b.startsWith('origin/')) {
+                            decorParts.push(`\x1b[1;31m${b}\x1b[0m`);  // Bold red for remote branches
+                        } else {
+                            decorParts.push(`\x1b[1;32m${b}\x1b[0m`);  // Bold green for local branches
+                        }
+                    });
+                }
+                
+                if (decorParts.length > 0) {
+                    decoration = ` \x1b[33m(\x1b[0m${decorParts.join('\x1b[33m,\x1b[0m ')}\x1b[33m)\x1b[0m`;
                 }
                 
                 term.writeln(`\x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
@@ -1341,21 +1474,58 @@ async function gitBranch(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
         
-        if (args.length === 0) {
+        // Check for flags
+        const showRemote = args.includes('-r') || args.includes('--remotes');
+        const showAll = args.includes('-a') || args.includes('--all');
+        
+        if (args.length === 0 || showRemote || showAll) {
             // List branches
-            const branches = await git.listBranches({ fs, dir });
             const current = await git.currentBranch({ fs, dir });
             
             printNormal('');
-            branches.forEach(branch => {
-                const marker = branch === current ? '* ' : '  ';
-                const color = branch === current ? '\x1b[32m' : '';
-                term.writeln(`${marker}${color}${branch}\x1b[0m`);
-            });
-            printHint('Create a new branch with "git branch <branchname>"');
+            
+            // Show local branches
+            if (!showRemote) {
+                const localBranches = await git.listBranches({ fs, dir });
+                localBranches.forEach(branch => {
+                    const marker = branch === current ? '* ' : '  ';
+                    const color = branch === current ? '\x1b[32m' : '';
+                    term.writeln(`${marker}${color}${branch}\x1b[0m`);
+                });
+            }
+            
+            // Show remote branches
+            if (showRemote || showAll) {
+                try {
+                    const remoteBranches = await git.listBranches({ fs, dir, remote: 'origin' });
+                    if (remoteBranches.length > 0) {
+                        if (showAll) printNormal('');
+                        remoteBranches.forEach(branch => {
+                            term.writeln(`  \x1b[31mremotes/origin/${branch}\x1b[0m`);
+                        });
+                    } else if (showRemote) {
+                        printHint('No remote branches found. Try "git fetch --all" first.');
+                    }
+                } catch (e) {
+                    if (showRemote) {
+                        printHint('No remote configured or remote branches not fetched yet.');
+                    }
+                }
+            }
+            
+            if (!showRemote && !showAll) {
+                printHint('Use "git branch -r" to see remote branches');
+                printHint('Use "git branch -a" to see all branches');
+                printHint('Create a new branch with "git branch <branchname>"');
+            }
         } else {
-            // Create branch
-            const branchName = args[0];
+            // Create branch (filter out flags)
+            const branchName = args.find(arg => !arg.startsWith('-'));
+            if (!branchName) {
+                printError('Please specify a branch name');
+                return;
+            }
+            
             await git.branch({ fs, dir, ref: branchName });
             printNormal(`Branch '${branchName}' created`);
             printHint(`Switch to the new branch with "git checkout ${branchName}"`);
@@ -1520,22 +1690,111 @@ async function gitPull(args) {
 async function gitClone(args) {
     if (args.length === 0) {
         printError('You must specify a repository to clone.');
-        printHint('Usage: git clone <url>');
-        printHint('For learning, try: git clone https://github.com/student/example.git');
+        printHint('Usage: git clone <url> [directory]');
+        printHint('Example: git clone https://github.com/numpy/numpy.git');
+        return;
+    }
+    
+    // Get HTTP module (required for cloning)
+    const httpModule = window.GitHttp || window.git?.http;
+    if (!httpModule) {
+        printError('HTTP module not loaded. Cannot clone from remote repositories.');
+        printHint('Make sure the page loaded correctly. Try refreshing.');
         return;
     }
     
     const url = args[0];
-    const repoName = url.split('/').pop().replace('.git', '');
+    const customDir = args[1]; // Optional custom directory name
+    
+    // Extract repository name from URL
+    let repoName = url.split('/').pop().replace('.git', '');
+    if (customDir) {
+        repoName = customDir;
+    }
+    
+    // Validate URL
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        printError('Only HTTP(S) URLs are supported');
+        printHint('Example: git clone https://github.com/user/repo.git');
+        return;
+    }
+    
+    const targetPath = resolvePath(repoName);
+    
+    // Check if directory already exists
+    try {
+        await pfs.stat(targetPath);
+        printError(`fatal: destination path '${repoName}' already exists and is not an empty directory.`);
+        return;
+    } catch (e) {
+        // Directory doesn't exist, which is what we want
+    }
     
     printNormal(`Cloning into '${repoName}'...`);
-    printNormal('remote: Counting objects: 15, done.');
-    printNormal('remote: Compressing objects: 100% (10/10), done.');
-    printNormal('remote: Total 15 (delta 2), reused 15 (delta 2)');
-    printNormal('Receiving objects: 100% (15/15), done.');
-    printNormal('Resolving deltas: 100% (2/2), done.');
-    printHint('Clone simulated! In a real scenario, this would download a repository from a remote server');
-    printHint('The actual cloning functionality requires a real remote server, which is beyond this learning environment');
+    
+    try {
+        // Create directory
+        await pfs.mkdir(targetPath, { recursive: true });
+        
+        // Clone the repository (fetch all branches by default)
+        await git.clone({
+            fs,
+            http: httpModule,
+            dir: targetPath,
+            url: url,
+            corsProxy: 'https://cors.isomorphic-git.org',
+            singleBranch: false, // Fetch all branches
+            depth: 10, // Shallow clone for performance (only last 10 commits)
+            onProgress: (event) => {
+                if (event.phase === 'Receiving objects' || event.phase === 'Resolving deltas') {
+                    const percent = event.total ? Math.round((event.loaded / event.total) * 100) : '?';
+                    printNormal(`${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
+                }
+            },
+            onMessage: (message) => {
+                printNormal(`remote: ${message}`);
+            },
+            onAuth: () => {
+                // For public repos, no auth needed
+                return { username: '', password: '' };
+            }
+        });
+        
+        // Configure git user in the cloned repo
+        await git.setConfig({ fs, dir: targetPath, path: 'user.name', value: 'Student' });
+        await git.setConfig({ fs, dir: targetPath, path: 'user.email', value: 'student@example.com' });
+        
+        printNormal('');
+        printNormal(`\x1b[32m✓ Successfully cloned repository!\x1b[0m`);
+        printHint(`cd ${repoName} && git log --graph --oneline to explore the history`);
+        printHint('Note: Large repositories may take some time. Using shallow clone (depth=10) for performance.');
+        
+    } catch (error) {
+        printError(`Failed to clone repository: ${error.message}`);
+        
+        // Clean up partial clone
+        try {
+            await removeDirectory(targetPath);
+        } catch (cleanupError) {
+            // Ignore cleanup errors
+        }
+        
+        // Provide helpful error messages
+        if (error.message.includes('404') || error.message.includes('not found')) {
+            printHint('Repository not found. Check the URL and make sure the repository is public.');
+        } else if (error.message.includes('CORS') || error.message.includes('cors')) {
+            printHint('CORS error. The repository might not allow cross-origin requests.');
+        } else if (error.message.includes('rate limit')) {
+            printHint('GitHub rate limit exceeded. Try again later.');
+        } else if (error.message.includes('timeout')) {
+            printHint('Request timed out. The repository might be too large or your connection is slow.');
+            printHint('Try a smaller repository or check your internet connection.');
+        } else {
+            printHint('Make sure the repository URL is correct and the repository is public.');
+        }
+        
+        console.error('Clone error details:', error);
+    }
 }
 
 async function gitRm(args) {
@@ -1752,15 +2011,100 @@ async function gitShow(args) {
 }
 
 async function gitFetch(args) {
-    printNormal('Fetching origin...');
-    printNormal('remote: Counting objects: 5, done.');
-    printNormal('remote: Compressing objects: 100% (3/3), done.');
-    printNormal('remote: Total 5 (delta 2), reused 5 (delta 2)');
-    printNormal('Unpacking objects: 100% (5/5), done.');
-    printNormal('From https://github.com/student/project');
-    printNormal('   abc1234..def5678  main       -> origin/main');
-    printHint('Fetch downloads objects and refs from another repository');
-    printHint('Unlike pull, fetch does not merge changes into your working directory');
+    try {
+        const dir = await git.findRoot({ fs, filepath: currentDir });
+        
+        // Get HTTP module
+        const httpModule = window.GitHttp || window.git?.http;
+        if (!httpModule) {
+            printError('HTTP module not loaded. Cannot fetch from remote repositories.');
+            printHint('Fetch requires network access. Make sure the page loaded correctly.');
+            return;
+        }
+        
+        // Check if there's a remote configured
+        let remoteUrl;
+        try {
+            remoteUrl = await git.getConfig({ fs, dir, path: 'remote.origin.url' });
+        } catch (e) {
+            printError('fatal: No remote repository configured.');
+            printHint('Add a remote with: git remote add origin <url>');
+            return;
+        }
+        
+        if (!remoteUrl) {
+            printError('fatal: No remote repository configured.');
+            printHint('This repository was not cloned. Add a remote with: git remote add origin <url>');
+            return;
+        }
+        
+        // Parse arguments
+        const fetchAll = args.includes('--all') || args.includes('-a');
+        const prune = args.includes('--prune') || args.includes('-p');
+        
+        printNormal(`Fetching origin`);
+        
+        try {
+            // Fetch from remote
+            const fetchResult = await git.fetch({
+                fs,
+                http: httpModule,
+                dir: dir,
+                url: remoteUrl,
+                remote: 'origin',
+                corsProxy: 'https://cors.isomorphic-git.org',
+                prune: prune,
+                singleBranch: !fetchAll, // If --all, fetch all branches
+                depth: 10,
+                onProgress: (event) => {
+                    if (event.phase === 'Receiving objects' || event.phase === 'Resolving deltas') {
+                        const percent = event.total ? Math.round((event.loaded / event.total) * 100) : '?';
+                        printNormal(`${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
+                    }
+                },
+                onMessage: (message) => {
+                    printNormal(`remote: ${message}`);
+                },
+                onAuth: () => {
+                    return { username: '', password: '' };
+                }
+            });
+            
+            printNormal('');
+            printNormal(`From ${remoteUrl}`);
+            
+            // List fetched branches
+            const remoteBranches = await git.listBranches({ fs, dir, remote: 'origin' });
+            if (remoteBranches.length > 0) {
+                printNormal(`Fetched ${remoteBranches.length} branch(es):`);
+                remoteBranches.forEach(branch => {
+                    printNormal(`  * [new branch]      ${branch} -> origin/${branch}`);
+                });
+            }
+            
+            printNormal('');
+            printNormal('\x1b[32m✓ Fetch complete!\x1b[0m');
+            printHint('Use "git branch -r" to see remote branches');
+            printHint('Use "git checkout <branch>" to switch to a fetched branch');
+            
+        } catch (error) {
+            printError(`Failed to fetch: ${error.message}`);
+            
+            if (error.message.includes('404') || error.message.includes('not found')) {
+                printHint('Remote repository not found. The URL might have changed.');
+            } else if (error.message.includes('CORS')) {
+                printHint('CORS error. The remote server might not allow cross-origin requests.');
+            } else {
+                printHint('Make sure you have internet connection and the remote URL is correct.');
+            }
+            
+            console.error('Fetch error details:', error);
+        }
+        
+    } catch (error) {
+        printError(`git fetch failed: ${error.message}`);
+        console.error('Fetch error:', error);
+    }
 }
 
 async function gitStash(args) {
