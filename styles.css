@@ -87,6 +87,17 @@ body {
     border-bottom: 1px solid #3e3e42;
 }
 
+.current-dir {
+    background-color: #094771;
+    color: #ffffff;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: bold;
+    border-left: 3px solid #007acc;
+}
+
 .right-panel {
     flex: 1;
     display: flex;
@@ -129,6 +140,20 @@ body {
 
 .tree-file {
     color: #9cdcfe;
+}
+
+.clickable-file {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.clickable-file:hover {
+    background-color: #094771 !important;
+    transform: translateX(2px);
+}
+
+.clickable-file:active {
+    background-color: #005a9e !important;
 }
 
 .tree-children {
@@ -183,24 +208,80 @@ body {
     font-weight: bold;
 }
 
+.editor-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.editor-icon-btn {
+    background-color: transparent;
+    color: #ffffff;
+    border: 1px solid #3e3e42;
+    padding: 6px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s ease;
+    min-width: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.editor-icon-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.editor-icon-btn:hover {
+    background-color: #094771;
+    border-color: #007acc;
+}
+
+.editor-icon-btn:active {
+    background-color: #005a9e;
+}
+
 .editor {
     flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* CodeMirror styling overrides */
+.CodeMirror {
+    height: 100% !important;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
+    font-size: 14px !important;
     background-color: #1e1e1e;
-    color: #d4d4d4;
-    border: none;
-    padding: 15px;
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-    font-size: 14px;
-    resize: none;
-    outline: none;
-    line-height: 1.5;
+}
+
+.CodeMirror-gutters {
+    background-color: #1e1e1e !important;
+    border-right: 1px solid #3e3e42 !important;
+    min-width: 40px !important;
+}
+
+.CodeMirror-linenumber {
+    color: #858585 !important;
+    padding: 0 8px 0 5px !important;
+    min-width: 30px !important;
+}
+
+.CodeMirror-lines {
+    padding: 4px 8px 4px 4px !important;
+}
+
+.CodeMirror-line {
+    padding-left: 10px !important;
 }
 
 .editor-footer {
     background-color: #2d2d30;
     padding: 10px 15px;
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
     border-top: 1px solid #3e3e42;
 }
@@ -241,6 +322,11 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
     background: #4e4e4e;
+}
+
+/* Fix lightbulb emoji spacing in xterm */
+.xterm .xterm-fg-2 {
+    letter-spacing: 0px !important;
 }
 
 /* Responsive Design */

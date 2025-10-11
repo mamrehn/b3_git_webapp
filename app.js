@@ -48,6 +48,7 @@ let historyIndex = -1;
 let currentProject = 'project1';
 let editorFile = null;
 let editorOriginalContent = '';
+let codeMirrorInstance = null;
 
 // Initialize the application
 async function init() {
@@ -216,7 +217,7 @@ async function setupProject2() {
 
 function printWelcome() {
     term.writeln('\r\n\x1b[36m╔════════════════════════════════════════════════════════════╗\x1b[0m');
-    term.writeln('\x1b[36m║        Welcome to the Git Learning Terminal!              ║\x1b[0m');
+    term.writeln('\x1b[36m║        Welcome to the Git Learning Terminal!               ║\x1b[0m');
     term.writeln('\x1b[36m╚════════════════════════════════════════════════════════════╝\x1b[0m');
     term.writeln('\r\n\x1b[32m💡  Hint: This is a safe learning environment. Try any git command!\x1b[0m');
     term.writeln('\x1b[32m💡  Hint: Type "help" for available commands.\x1b[0m');
@@ -226,7 +227,12 @@ function printWelcome() {
 
 function showPrompt() {
     const dir = currentDir.replace('/home/student', '~');
-    term.write(`\r\n\x1b[32mstudent@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m$ `);
+    term.write(`\r\n\x1b[36mme@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m$ `);
+}
+
+function showPromptInline() {
+    const dir = currentDir.replace('/home/student', '~');
+    term.write(`\x1b[36mme@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m$ `);
 }
 
 function printNormal(text) {
@@ -264,6 +270,9 @@ async function processCommand(cmd) {
                 break;
             case 'ls':
                 await cmdLs(args);
+                break;
+            case 'll':
+                await cmdLs(['-la']);
                 break;
             case 'cd':
                 await cmdCd(args);
@@ -339,6 +348,7 @@ async function cmdHelp() {
     printNormal('╚════════════════════════════════════════════════════════════╝\x1b[0m');
     printNormal('\x1b[36mFile System Commands:\x1b[0m');
     printNormal('  ls [options]          - List directory contents');
+    printNormal('  ll                    - List all files (alias for ls -la)');
     printNormal('  cd <directory>        - Change directory');
     printNormal('  pwd                   - Print working directory');
     printNormal('  cat <file>            - Display file contents');
@@ -1005,11 +1015,35 @@ async function gitClone(args) {
 // File tree management
 async function updateFileTree() {
     const treeContainer = document.getElementById('fileTree');
+    const currentDirDisplay = document.getElementById('currentDir');
     treeContainer.innerHTML = '';
+    
+    // Update current directory display
+    const displayDir = currentDir.replace('/home/student', '~');
+    currentDirDisplay.textContent = `📁 ${displayDir}`;
     
     try {
         const tree = await buildFileTree('/home/student');
         treeContainer.innerHTML = tree;
+        
+        // Add click handlers to files
+        const clickableFiles = treeContainer.querySelectorAll('.clickable-file');
+        clickableFiles.forEach(fileElement => {
+            fileElement.addEventListener('click', async () => {
+                const filepath = fileElement.getAttribute('data-filepath');
+                const filename = filepath.split('/').pop();
+                
+                try {
+                    const content = await pfs.readFile(filepath, 'utf8');
+                    editorFile = filepath;
+                    editorOriginalContent = content;
+                    openEditor(filename, content);
+                    printHint(`Opened ${filename} in editor. Edit and use Ctrl+S to save, Ctrl+X to close.`);
+                } catch (error) {
+                    printError(`Error opening file: ${error.message}`);
+                }
+            });
+        });
     } catch (error) {
         treeContainer.innerHTML = `<div style="color: #f44;">Error loading file tree</div>`;
     }
@@ -1055,7 +1089,7 @@ async function buildFileTree(path, indent = 0) {
                     html += await buildFileTree(file.path, indent + 1);
                 }
             } else {
-                html += `<div class="tree-file ${hiddenClass}" style="margin-left: ${indent * 15}px">`;
+                html += `<div class="tree-file ${hiddenClass} clickable-file" data-filepath="${file.path}" style="margin-left: ${indent * 15}px">`;
                 html += `<span class="file-icon"></span>${file.name}`;
                 html += `</div>`;
             }
@@ -1067,28 +1101,92 @@ async function buildFileTree(path, indent = 0) {
     return html;
 }
 
+// Helper function to detect file mode from extension
+function getEditorMode(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const modeMap = {
+        'html': 'htmlmixed',
+        'htm': 'htmlmixed',
+        'css': 'css',
+        'js': 'javascript',
+        'json': 'javascript',
+        'md': 'markdown',
+        'markdown': 'markdown',
+        'py': 'python',
+        'sh': 'shell',
+        'bash': 'shell',
+        'xml': 'xml',
+        'txt': 'text'
+    };
+    return modeMap[ext] || 'text';
+}
+
 // Editor management
 function openEditor(filename, content) {
     const editorContainer = document.getElementById('editorContainer');
     const editorTitle = document.getElementById('editorTitle');
-    const editor = document.getElementById('editor');
+    let editorElement = document.getElementById('editor');
     
     editorTitle.textContent = `Editing: ${filename}`;
-    editor.value = content;
+    
+    // If CodeMirror instance exists, just update it
+    if (codeMirrorInstance) {
+        codeMirrorInstance.setValue(content);
+        codeMirrorInstance.setOption('mode', getEditorMode(filename));
+        editorContainer.classList.remove('hidden');
+        codeMirrorInstance.refresh();
+        setTimeout(() => codeMirrorInstance.refresh(), 10);
+        codeMirrorInstance.focus();
+        return;
+    }
+    
+    // Create new CodeMirror instance
+    codeMirrorInstance = CodeMirror(function(elt) {
+        editorElement.parentNode.replaceChild(elt, editorElement);
+    }, {
+        value: content,
+        mode: getEditorMode(filename),
+        theme: 'dracula',
+        lineNumbers: true,
+        lineWrapping: true,
+        indentUnit: 4,
+        tabSize: 4,
+        indentWithTabs: false,
+        autoCloseBrackets: true,
+        matchBrackets: true,
+        extraKeys: {
+            'Ctrl-S': function() {
+                saveEditor();
+            },
+            'Ctrl-X': function() {
+                closeEditor();
+            }
+        }
+    });
+    
     editorContainer.classList.remove('hidden');
-    editor.focus();
+    // Force refresh after showing
+    setTimeout(() => {
+        codeMirrorInstance.refresh();
+        codeMirrorInstance.focus();
+    }, 10);
 }
 
 function closeEditor() {
     const editorContainer = document.getElementById('editorContainer');
+    
+    // Just hide the editor, don't destroy CodeMirror instance
     editorContainer.classList.add('hidden');
     editorFile = null;
     editorOriginalContent = '';
+    showPrompt();
+    term.focus();
 }
 
 async function saveEditor() {
-    const editor = document.getElementById('editor');
-    const content = editor.value;
+    if (!codeMirrorInstance) return;
+    
+    const content = codeMirrorInstance.getValue();
     
     try {
         await pfs.writeFile(editorFile, content, 'utf8');
@@ -1109,15 +1207,56 @@ document.getElementById('closeEditor').addEventListener('click', () => {
     closeEditor();
 });
 
-document.getElementById('editor').addEventListener('keydown', async (e) => {
-    if (e.ctrlKey && e.key === 's') {
-        e.preventDefault();
-        await saveEditor();
-    } else if (e.ctrlKey && e.key === 'x') {
-        e.preventDefault();
-        closeEditor();
+// Tab completion
+async function handleTabCompletion() {
+    const parts = currentLine.split(/\s+/);
+    const lastPart = parts[parts.length - 1];
+    
+    // Command completion (if it's the first word)
+    if (parts.length === 1) {
+        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'clear', 'reset', 'vi', 'vim', 'nano', 'edit', 'git'];
+        const matches = commands.filter(cmd => cmd.startsWith(lastPart));
+        
+        if (matches.length === 1) {
+            const completion = matches[0].substring(lastPart.length);
+            currentLine += completion + ' ';
+            cursorPos = currentLine.length;
+            term.write(completion + ' ');
+        } else if (matches.length > 1) {
+            term.write('\r\n');
+            term.writeln(matches.join('  '));
+            showPromptInline();
+            term.write(currentLine);
+        }
+        return;
     }
-});
+    
+    // File/directory completion
+    try {
+        const files = await pfs.readdir(currentDir);
+        const matches = files.filter(file => file.startsWith(lastPart));
+        
+        if (matches.length === 1) {
+            const completion = matches[0].substring(lastPart.length);
+            const fullPath = `${currentDir}/${matches[0]}`;
+            const stats = await pfs.stat(fullPath);
+            const suffix = stats.isDirectory() ? '/' : ' ';
+            
+            currentLine = currentLine.substring(0, currentLine.length - lastPart.length) + matches[0] + suffix;
+            cursorPos = currentLine.length;
+            term.write('\r\x1b[K');
+            showPromptInline();
+            term.write(currentLine);
+        } else if (matches.length > 1) {
+            term.write('\r\n');
+            term.writeln(matches.join('  '));
+            showPromptInline();
+            term.write(currentLine);
+        }
+    } catch (error) {
+        // Ignore completion errors
+    }
+}
 
 // Terminal input handling
 term.onData(data => {
@@ -1129,6 +1268,8 @@ term.onData(data => {
         processCommand(currentLine);
         currentLine = '';
         cursorPos = 0;
+    } else if (code === 9) { // Tab - autocomplete
+        handleTabCompletion();
     } else if (code === 127) { // Backspace
         if (cursorPos > 0) {
             currentLine = currentLine.slice(0, cursorPos - 1) + currentLine.slice(cursorPos);
@@ -1147,7 +1288,7 @@ term.onData(data => {
                 historyIndex--;
                 // Clear current line
                 term.write('\r\x1b[K');
-                showPrompt();
+                showPromptInline();
                 currentLine = commandHistory[historyIndex] || '';
                 cursorPos = currentLine.length;
                 term.write(currentLine);
@@ -1156,14 +1297,14 @@ term.onData(data => {
             if (historyIndex < commandHistory.length - 1) {
                 historyIndex++;
                 term.write('\r\x1b[K');
-                showPrompt();
+                showPromptInline();
                 currentLine = commandHistory[historyIndex] || '';
                 cursorPos = currentLine.length;
                 term.write(currentLine);
             } else {
                 historyIndex = commandHistory.length;
                 term.write('\r\x1b[K');
-                showPrompt();
+                showPromptInline();
                 currentLine = '';
                 cursorPos = 0;
             }

@@ -6,6 +6,8 @@
     <title>Git Learning Terminal</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
 </head>
 <body>
     <div class="container">
@@ -21,6 +23,7 @@
             <div class="left-panel">
                 <div class="file-tree-container">
                     <h3>File Tree</h3>
+                    <div id="currentDir" class="current-dir">📁 ~</div>
                     <div id="fileTree"></div>
                 </div>
             </div>
@@ -33,11 +36,18 @@
                 <div id="editorContainer" class="editor-container hidden">
                     <div class="editor-header">
                         <span id="editorTitle">Editor</span>
-                        <button id="closeEditor" class="editor-btn">Close (Ctrl+X)</button>
+                        <div class="editor-actions">
+                            <button id="saveEditor" class="editor-icon-btn" title="Save (Ctrl+S)">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M13.5 1h-11C1.67 1 1 1.67 1 2.5v11c0 .83.67 1.5 1.5 1.5h11c.83 0 1.5-.67 1.5-1.5v-11c0-.83-.67-1.5-1.5-1.5zm-1 1v3.5c0 .28-.22.5-.5.5h-8c-.28 0-.5-.22-.5-.5V2h9zM3 14v-4.5c0-.28.22-.5.5-.5h9c.28 0 .5.22.5.5V14H3z"/>
+                                    <path d="M5 2h1v3H5zm5 0h1v3h-1z"/>
+                                </svg>
+                            </button>
+                            <button id="closeEditor" class="editor-icon-btn" title="Close (Ctrl+X)">✕</button>
+                        </div>
                     </div>
-                    <textarea id="editor" class="editor"></textarea>
+                    <div id="editor" class="editor"></div>
                     <div class="editor-footer">
-                        <button id="saveEditor" class="editor-btn">Save (Ctrl+S)</button>
                         <span class="editor-help">Ctrl+S: Save | Ctrl+X: Close</span>
                     </div>
                 </div>
@@ -49,6 +59,17 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://unpkg.com/@isomorphic-git/lightning-fs"></script>
     <script src="https://unpkg.com/isomorphic-git@1.25.0"></script>
+    
+    <!-- CodeMirror for syntax highlighting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/shell/shell.min.js"></script>
+    
     <script type="module" src="app.js"></script>
 </body>
 </html>
