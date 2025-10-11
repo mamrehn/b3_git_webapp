@@ -50,6 +50,12 @@ let editorFile = null;
 let editorOriginalContent = '';
 let codeMirrorInstance = null;
 
+// Reverse search state
+let reverseSearchMode = false;
+let reverseSearchQuery = '';
+let reverseSearchIndex = -1;
+let savedLine = '';
+
 // Initialize the application
 async function init() {
     try {
@@ -221,7 +227,7 @@ function printWelcome() {
     term.writeln('\x1b[36m╚════════════════════════════════════════════════════════════╝\x1b[0m');
     term.writeln('\r\n\x1b[32m💡  Hint: This is a safe learning environment. Try any git command!\x1b[0m');
     term.writeln('\x1b[32m💡  Hint: Type "help" for available commands.\x1b[0m');
-    term.writeln('\x1b[32m💡  Hint: Edit files using "vi <filename>" or "nano <filename>".\x1b[0m');
+    term.writeln('\x1b[32m💡  Hint: Edit files using "edit <filename>" or "vi <filename>".\x1b[0m');
     term.writeln('\x1b[32m💡  Hint: Two projects available: project1 (with commits) and project2 (empty).\x1b[0m\r\n');
 }
 
@@ -247,6 +253,59 @@ function printError(text) {
     term.writeln(`\r\n\x1b[31m${text}\x1b[0m`);
 }
 
+// Pipe handling
+async function processPipedCommands(fullCommand) {
+    try {
+        const commands = fullCommand.split('|').map(c => c.trim());
+        let output = '';
+        
+        // Execute first command and capture output
+        const firstCmd = commands[0];
+        const parts = firstCmd.split(/\s+/);
+        const command = parts[0];
+        const args = parts.slice(1);
+        
+        // Capture output from first command
+        if (command === 'history') {
+            output = commandHistory.map((cmd, i) => `${i + 1}  ${cmd}`).join('\n');
+        } else {
+            printError('Pipe only supported with history command currently');
+            return;
+        }
+        
+        // Process remaining commands in pipe
+        for (let i = 1; i < commands.length; i++) {
+            const pipeCmd = commands[i];
+            const pipeParts = pipeCmd.split(/\s+/);
+            const pipeCommand = pipeParts[0];
+            const pipeArgs = pipeParts.slice(1);
+            
+            if (pipeCommand === 'grep') {
+                if (pipeArgs.length === 0) {
+                    printError('grep: missing search pattern');
+                    return;
+                }
+                const pattern = pipeArgs[0].replace(/^["']|["']$/g, '');
+                const lines = output.split('\n');
+                output = lines.filter(line => line.toLowerCase().includes(pattern.toLowerCase())).join('\n');
+            } else {
+                printError(`Pipe command not supported: ${pipeCommand}`);
+                return;
+            }
+        }
+        
+        // Print final output
+        if (output) {
+            printNormal('');
+            output.split('\n').forEach(line => term.writeln(line));
+        } else {
+            printNormal('(no matches)');
+        }
+    } catch (error) {
+        printError(`Pipe error: ${error.message}`);
+    }
+}
+
 // Command processor
 async function processCommand(cmd) {
     const trimmedCmd = cmd.trim();
@@ -258,6 +317,14 @@ async function processCommand(cmd) {
     // Add to history
     commandHistory.push(trimmedCmd);
     historyIndex = commandHistory.length;
+    
+    // Handle pipes
+    if (trimmedCmd.includes('|')) {
+        await processPipedCommands(trimmedCmd);
+        await updateFileTree();
+        showPrompt();
+        return;
+    }
     
     const parts = trimmedCmd.split(/\s+/);
     const command = parts[0];
@@ -297,6 +364,9 @@ async function processCommand(cmd) {
                 break;
             case 'reset':
                 await cmdReset();
+                break;
+            case 'history':
+                await cmdHistory(args);
                 break;
             case 'vi':
             case 'vim':
@@ -342,6 +412,20 @@ async function cmdReset() {
     }
 }
 
+async function cmdHistory(args) {
+    if (commandHistory.length === 0) {
+        printNormal('(no commands in history)');
+        return;
+    }
+    
+    printNormal('');
+    commandHistory.forEach((cmd, index) => {
+        term.writeln(`${String(index + 1).padStart(5)}  ${cmd}`);
+    });
+    
+    printHint('Use Ctrl+R for reverse history search, or pipe to grep: "history | grep pattern"');
+}
+
 async function cmdHelp() {
     printNormal('\x1b[33m╔════════════════════════════════════════════════════════════╗');
     printNormal('║                  Available Commands                        ║');
@@ -358,6 +442,13 @@ async function cmdHelp() {
     printNormal('  vi/vim/nano <file>    - Edit file');
     printNormal('  clear                 - Clear terminal');
     printNormal('  reset                 - Reset filesystem to initial state');
+    printNormal('  history               - Show command history');
+    printNormal('');
+    printNormal('\x1b[36mAdvanced Features:\x1b[0m');
+    printNormal('  <cmd> | grep <text>   - Filter output with grep');
+    printNormal('  Ctrl+R                - Reverse history search');
+    printNormal('  Tab                   - Auto-complete commands/files');
+    printNormal('  ↑/↓                   - Navigate command history');
     printNormal('');
     printNormal('\x1b[36mGit Commands:\x1b[0m');
     printNormal('  git init              - Initialize git repository');
@@ -1214,7 +1305,7 @@ async function handleTabCompletion() {
     
     // Command completion (if it's the first word)
     if (parts.length === 1) {
-        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'clear', 'reset', 'vi', 'vim', 'nano', 'edit', 'git'];
+        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'clear', 'reset', 'history', 'grep', 'vi', 'vim', 'nano', 'edit', 'git'];
         const matches = commands.filter(cmd => cmd.startsWith(lastPart));
         
         if (matches.length === 1) {
@@ -1258,9 +1349,137 @@ async function handleTabCompletion() {
     }
 }
 
+// Reverse search functions
+function startReverseSearch() {
+    if (commandHistory.length === 0) {
+        // No history available
+        term.write('\r\x1b[K');
+        term.write('\x1b[31m(no history available)\x1b[0m');
+        setTimeout(() => {
+            term.write('\r\x1b[K');
+            showPromptInline();
+            term.write(currentLine);
+        }, 1000);
+        return;
+    }
+    
+    reverseSearchMode = true;
+    reverseSearchQuery = '';
+    reverseSearchIndex = commandHistory.length;
+    savedLine = currentLine;
+    currentLine = '';
+    cursorPos = 0;
+    updateReverseSearchPrompt();
+}
+
+function updateReverseSearchPrompt(failed = false) {
+    term.write('\r\x1b[K');
+    if (failed) {
+        term.write(`\x1b[31m(failed reverse-i-search)\`${reverseSearchQuery}': \x1b[0m${currentLine}`);
+    } else {
+        term.write(`\x1b[33m(reverse-i-search)\`${reverseSearchQuery}': \x1b[0m${currentLine}`);
+    }
+}
+
+function exitReverseSearch(accept = true) {
+    reverseSearchMode = false;
+    if (!accept) {
+        currentLine = savedLine;
+        cursorPos = savedLine.length;
+    } else {
+        cursorPos = currentLine.length;
+    }
+    term.write('\r\x1b[K');
+    showPromptInline();
+    term.write(currentLine);
+}
+
+function searchHistoryReverse() {
+    // Empty query - show most recent command (or next on subsequent Ctrl+R presses)
+    if (reverseSearchQuery === '') {
+        if (reverseSearchIndex > 0) {
+            reverseSearchIndex--;
+            currentLine = commandHistory[reverseSearchIndex];
+            updateReverseSearchPrompt(false);
+        } else {
+            // Already at the beginning, stay at first command
+            reverseSearchIndex = 0;
+            currentLine = commandHistory[0];
+            updateReverseSearchPrompt(false);
+        }
+        return;
+    }
+    
+    // Search backwards through history with query
+    for (let i = reverseSearchIndex - 1; i >= 0; i--) {
+        if (commandHistory[i].toLowerCase().includes(reverseSearchQuery.toLowerCase())) {
+            reverseSearchIndex = i;
+            currentLine = commandHistory[i];
+            updateReverseSearchPrompt(false);
+            return;
+        }
+    }
+    
+    // Wrap around to end
+    for (let i = commandHistory.length - 1; i > reverseSearchIndex; i--) {
+        if (commandHistory[i].toLowerCase().includes(reverseSearchQuery.toLowerCase())) {
+            reverseSearchIndex = i;
+            currentLine = commandHistory[i];
+            updateReverseSearchPrompt(false);
+            return;
+        }
+    }
+    
+    // No match found - show failed search indicator
+    currentLine = '';
+    updateReverseSearchPrompt(true);
+}
+
 // Terminal input handling
 term.onData(data => {
     const code = data.charCodeAt(0);
+    
+    // Ctrl+R - Reverse search
+    if (code === 18) { // Ctrl+R
+        if (reverseSearchMode) {
+            searchHistoryReverse();
+        } else {
+            startReverseSearch();
+        }
+        return;
+    }
+    
+    // Ctrl+C or Escape - Exit reverse search
+    if ((code === 3 || code === 27) && reverseSearchMode) {
+        exitReverseSearch(false);
+        return;
+    }
+    
+    // Handle reverse search mode
+    if (reverseSearchMode) {
+        if (code === 13) { // Enter - accept current match
+            exitReverseSearch(true);
+            term.write('\r\n');
+            processCommand(currentLine);
+            currentLine = '';
+            cursorPos = 0;
+            return;
+        } else if (code === 127) { // Backspace in search
+            if (reverseSearchQuery.length > 0) {
+                reverseSearchQuery = reverseSearchQuery.slice(0, -1);
+                reverseSearchIndex = commandHistory.length;
+                currentLine = '';
+                searchHistoryReverse();
+            }
+            return;
+        } else if (code >= 32 && code <= 126) { // Add to search query
+            reverseSearchQuery += data;
+            reverseSearchIndex = commandHistory.length;
+            searchHistoryReverse();
+            return;
+        }
+        return;
+    }
     
     // Handle special keys
     if (code === 13) { // Enter
