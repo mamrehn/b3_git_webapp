@@ -38,6 +38,7 @@ window.addEventListener('resize', () => {
 const fs = new LightningFS('gitlearning');
 const pfs = fs.promises;
 const git = window.git;
+const http = window.GitHttp || window.git?.http;
 
 // State
 let currentDir = '/home/student';
@@ -59,6 +60,19 @@ let savedLine = '';
 // Initialize the application
 async function init() {
     try {
+        // Wait for HTTP module to load (if using module import)
+        let attempts = 0;
+        while (!window.GitHttp && attempts < 50) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        
+        if (window.GitHttp) {
+            console.log('✅ HTTP module loaded successfully');
+        } else {
+            console.warn('⚠️  HTTP module not loaded, cloning will fallback to sample project');
+        }
+        
         // Setup directory structure
         await setupFileSystem();
         
@@ -112,7 +126,8 @@ async function setupFileSystem() {
     }
     
     // Setup project1 with initial files and commits (only if not already initialized)
-    if (!await fileExists('/home/student/project1/index.html')) {
+    // Check for .git directory instead of specific files (works for any cloned repo)
+    if (!await dirExists('/home/student/project1/.git')) {
         await setupProject1();
     }
     
@@ -125,6 +140,75 @@ async function setupFileSystem() {
 async function setupProject1() {
     const project1Path = '/home/student/project1';
     
+    try {
+        // Get HTTP module (might be loaded dynamically)
+        const httpModule = window.GitHttp || window.git?.http;
+        
+        // Check if HTTP module is available
+        if (!httpModule) {
+            throw new Error('isomorphic-git HTTP module not loaded. Check if the script is included in index.html');
+        }
+        
+        // Clone the real GitHub repository
+        console.log('🔄 Cloning https://github.com/mamrehn/project1.git...');
+        console.log('   Using CORS proxy: https://cors.isomorphic-git.org');
+        console.log('   HTTP module available:', !!httpModule);
+        console.log('   Git version:', git.version?.());
+        
+        await git.clone({
+            fs,
+            http: httpModule,
+            dir: project1Path,
+            url: 'https://github.com/mamrehn/project1.git',
+            corsProxy: 'https://cors.isomorphic-git.org',
+            singleBranch: true,
+            depth: 100, // Limit history depth for performance
+            onProgress: (event) => {
+                console.log(`   Progress: ${event.phase} ${event.loaded}/${event.total || '?'}`);
+            },
+            onMessage: (message) => {
+                console.log(`   Git: ${message}`);
+            }
+        });
+        
+        // Configure git user for the cloned repo
+        await git.setConfig({ fs, dir: project1Path, path: 'user.name', value: 'Student' });
+        await git.setConfig({ fs, dir: project1Path, path: 'user.email', value: 'student@example.com' });
+        
+        console.log('✅ Successfully cloned project1 from GitHub!');
+        console.log('   Repository has real commit history from GitHub');
+        
+    } catch (error) {
+        console.error('❌ Error cloning repository:', error);
+        console.error('   Error name:', error.name);
+        console.error('   Error message:', error.message);
+        console.error('   Error stack:', error.stack);
+        
+        // Additional debugging
+        if (error.data) {
+            console.error('   Error data:', error.data);
+        }
+        if (error.caller) {
+            console.error('   Error caller:', error.caller);
+        }
+        
+        // Check if it's a network error
+        if (error.message?.includes('fetch') || error.message?.includes('CORS') || error.message?.includes('network')) {
+            console.error('   🌐 This appears to be a network/CORS error');
+            console.error('   💡 Make sure:');
+            console.error('      1. GitHub repository is public');
+            console.error('      2. CORS proxy is accessible');
+            console.error('      3. Network connection is working');
+        }
+        
+        console.log('⚠️  Falling back to creating sample project...');
+        
+        // Fallback: Create sample project if cloning fails
+        await createFallbackProject1(project1Path);
+    }
+}
+
+async function createFallbackProject1(project1Path) {
     // Initialize git repo
     await git.init({ fs, dir: project1Path, defaultBranch: 'main' });
     
@@ -228,7 +312,8 @@ function printWelcome() {
     term.writeln('\r\n\x1b[32m💡  Hint: This is a safe learning environment. Try any git command!\x1b[0m');
     term.writeln('\x1b[32m💡  Hint: Type "help" for available commands.\x1b[0m');
     term.writeln('\x1b[32m💡  Hint: Edit files using "edit <filename>" or "vi <filename>".\x1b[0m');
-    term.writeln('\x1b[32m💡  Hint: Two projects available: project1 (with commits) and project2 (empty).\x1b[0m\r\n');
+    term.writeln('\x1b[32m💡  Hint: project1 is cloned from GitHub (mamrehn/project1)\x1b[0m');
+    term.writeln('\x1b[32m💡  Hint: project2 is empty - You can initialize it with "git init"\x1b[0m\r\n');
 }
 
 function showPrompt() {
@@ -239,6 +324,34 @@ function showPrompt() {
 function showPromptInline() {
     const dir = currentDir.replace('/home/student', '~');
     term.write(`\x1b[36mme@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m$ `);
+}
+
+// Helper functions
+function resolvePath(path) {
+    if (path.startsWith('/')) {
+        return path;
+    }
+    if (path.startsWith('~')) {
+        return path.replace('~', '/home/student');
+    }
+    return `${currentDir}/${path}`.replace(/\/+/g, '/');
+}
+
+async function removeDirectory(dirPath) {
+    const items = await fs.promises.readdir(dirPath);
+    
+    for (const item of items) {
+        const itemPath = `${dirPath}/${item}`;
+        const stat = await fs.promises.stat(itemPath);
+        
+        if (stat.isDirectory()) {
+            await removeDirectory(itemPath);
+        } else {
+            await fs.promises.unlink(itemPath);
+        }
+    }
+    
+    await fs.promises.rmdir(dirPath);
 }
 
 function printNormal(text) {
@@ -368,6 +481,9 @@ async function processCommand(cmd) {
             case 'history':
                 await cmdHistory(args);
                 break;
+            case 'debug':
+                await cmdDebug();
+                break;
             case 'vi':
             case 'vim':
             case 'nano':
@@ -391,12 +507,39 @@ async function processCommand(cmd) {
 
 async function cmdReset() {
     printNormal('\x1b[33mResetting filesystem to initial state...\x1b[0m');
+    printNormal('This may take a few seconds while cloning from GitHub...');
     
     try {
-        // Clear the entire filesystem by wiping IndexedDB
-        await fs.wipe();
+        // Recursively delete all files and directories
+        async function deleteRecursive(path) {
+            try {
+                const stat = await pfs.stat(path);
+                if (stat.isDirectory()) {
+                    const files = await pfs.readdir(path);
+                    for (const file of files) {
+                        await deleteRecursive(`${path}/${file}`);
+                    }
+                    await pfs.rmdir(path);
+                } else {
+                    await pfs.unlink(path);
+                }
+            } catch (e) {
+                // Ignore errors for files that don't exist
+                console.log(`Skip delete: ${path}`, e.message);
+            }
+        }
         
-        // Reinitialize
+        // Delete all content under /home/student
+        try {
+            const projects = await pfs.readdir('/home/student');
+            for (const project of projects) {
+                await deleteRecursive(`/home/student/${project}`);
+            }
+        } catch (e) {
+            console.log('Error deleting projects:', e);
+        }
+        
+        // Reinitialize filesystem
         await setupFileSystem();
         
         // Reset to home directory
@@ -404,12 +547,58 @@ async function cmdReset() {
         currentProject = 'project1';
         
         printNormal('\x1b[32m✓ Filesystem reset complete!\x1b[0m');
-        printHint('All projects have been reset to their initial state.');
+        printHint('project1 has been cloned from GitHub with real commit history!');
+        printHint('Use "cd project1 && git log" to see the real commits.');
         
         await updateFileTree();
     } catch (error) {
         printError(`Error resetting filesystem: ${error.message}`);
+        console.error('Reset error details:', error);
     }
+}
+
+async function cmdDebug() {
+    printNormal('\x1b[33m=== Debug Information ===\x1b[0m');
+    printNormal('');
+    
+    // Check HTTP module
+    printNormal('\x1b[36mHTTP Module Status:\x1b[0m');
+    printNormal(`  window.GitHttp: ${!!window.GitHttp ? '\x1b[32m✓ loaded\x1b[0m' : '\x1b[31m✗ not loaded\x1b[0m'}`);
+    printNormal(`  window.git.http: ${!!window.git?.http ? '\x1b[32m✓ available\x1b[0m' : '\x1b[31m✗ not available\x1b[0m'}`);
+    printNormal('');
+    
+    // Check project1 status
+    printNormal('\x1b[36mProject1 Status:\x1b[0m');
+    try {
+        const gitDirExists = await pfs.stat('/home/student/project1/.git').then(() => true).catch(() => false);
+        printNormal(`  .git directory: ${gitDirExists ? '\x1b[32m✓ exists\x1b[0m' : '\x1b[31m✗ not found\x1b[0m'}`);
+        
+        if (gitDirExists) {
+            // Try to get the latest commit
+            const commits = await git.log({ fs, dir: '/home/student/project1', depth: 1 });
+            if (commits.length > 0) {
+                const commit = commits[0];
+                printNormal(`  Latest commit:`);
+                printNormal(`    Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                printNormal(`    Message: ${commit.commit.message}`);
+                printNormal(`    Date: ${new Date(commit.commit.author.timestamp * 1000).toLocaleString()}`);
+                
+                // Check if it's the fallback dummy project
+                if (commit.commit.author.email === 'student@example.com') {
+                    printNormal(`  \x1b[31m⚠️  This is the FALLBACK dummy project\x1b[0m`);
+                    printHint('The GitHub clone must have failed. Check browser console for errors.');
+                    printHint('Run "reset" to try cloning from GitHub again.');
+                } else {
+                    printNormal(`  \x1b[32m✓ This appears to be a REAL cloned repository\x1b[0m`);
+                }
+            }
+        }
+    } catch (error) {
+        printError(`Error checking project1: ${error.message}`);
+    }
+    printNormal('');
+    
+    printHint('Check browser console (F12) for detailed logs');
 }
 
 async function cmdHistory(args) {
@@ -443,6 +632,7 @@ async function cmdHelp() {
     printNormal('  clear                 - Clear terminal');
     printNormal('  reset                 - Reset filesystem to initial state');
     printNormal('  history               - Show command history');
+    printNormal('  debug                 - Show debug information');
     printNormal('');
     printNormal('\x1b[36mAdvanced Features:\x1b[0m');
     printNormal('  <cmd> | grep <text>   - Filter output with grep');
@@ -460,6 +650,14 @@ async function cmdHelp() {
     printNormal('  git checkout <branch> - Switch branches');
     printNormal('  git diff [file]       - Show changes');
     printNormal('  git reset <file>      - Unstage file');
+    printNormal('  git rm <file>         - Remove file from index');
+    printNormal('  git mv <src> <dest>   - Move/rename file');
+    printNormal('  git merge <branch>    - Merge branches');
+    printNormal('  git tag [name]        - Create or list tags');
+    printNormal('  git show [commit]     - Show commit details');
+    printNormal('  git fetch             - Download objects from remote');
+    printNormal('  git stash [push|pop]  - Stash changes');
+    printNormal('  git config <key> <val>- Get/set configuration');
     printNormal('  git clone <url>       - Clone remote repository');
     printNormal('  git push [remote]     - Push to remote');
     printNormal('  git pull [remote]     - Pull from remote');
@@ -718,6 +916,30 @@ async function cmdGit(args) {
         case 'clone':
             await gitClone(subargs);
             break;
+        case 'rm':
+            await gitRm(subargs);
+            break;
+        case 'mv':
+            await gitMv(subargs);
+            break;
+        case 'merge':
+            await gitMerge(subargs);
+            break;
+        case 'tag':
+            await gitTag(subargs);
+            break;
+        case 'show':
+            await gitShow(subargs);
+            break;
+        case 'fetch':
+            await gitFetch(subargs);
+            break;
+        case 'stash':
+            await gitStash(subargs);
+            break;
+        case 'config':
+            await gitConfig(subargs);
+            break;
         default:
             printError(`git: '${subcmd}' is not a git command. See 'help'.`);
     }
@@ -878,7 +1100,16 @@ async function gitCommit(args) {
 async function gitLog(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        const commits = await git.log({ fs, dir, depth: 10 });
+        
+        // Support --all flag for more commits
+        const depth = args.includes('--all') ? 100 : 20;
+        
+        const commits = await git.log({ 
+            fs, 
+            dir, 
+            depth: depth,
+            ref: 'HEAD'
+        });
         
         if (commits.length === 0) {
             printNormal('No commits yet');
@@ -890,15 +1121,29 @@ async function gitLog(args) {
         commits.forEach(commit => {
             term.writeln(`\x1b[33mcommit ${commit.oid}\x1b[0m`);
             term.writeln(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
-            term.writeln(`Date:   ${new Date(commit.commit.author.timestamp * 1000).toLocaleString()}`);
+            
+            // Format date properly
+            const date = new Date(commit.commit.author.timestamp * 1000);
+            const dateStr = date.toString();
+            term.writeln(`Date:   ${dateStr}`);
             term.writeln(``);
-            term.writeln(`    ${commit.commit.message}`);
+            
+            // Handle multi-line commit messages
+            const messageLines = commit.commit.message.trim().split('\n');
+            messageLines.forEach(line => {
+                term.writeln(`    ${line}`);
+            });
             term.writeln(``);
         });
         
-        printHint('Each commit has a unique ID (hash). You can use "git diff" to see changes between commits');
+        if (commits.length >= depth) {
+            printHint(`Showing last ${depth} commits. Use "git log --all" to see more`);
+        } else {
+            printHint('Use "git show <commit-hash>" to see details of a specific commit');
+        }
     } catch (error) {
         printError(`git log failed: ${error.message}`);
+        console.error('Git log error:', error);
     }
 }
 
@@ -1101,6 +1346,312 @@ async function gitClone(args) {
     printNormal('Resolving deltas: 100% (2/2), done.');
     printHint('Clone simulated! In a real scenario, this would download a repository from a remote server');
     printHint('The actual cloning functionality requires a real remote server, which is beyond this learning environment');
+}
+
+async function gitRm(args) {
+    if (args.length === 0) {
+        printError('fatal: No pathspec was given. Which files should I remove?');
+        printHint('Usage: git rm <file>...');
+        printHint('Use -r to remove directories recursively');
+        return;
+    }
+    
+    const dir = await git.findRoot({ fs, filepath: currentDir });
+    const recursive = args.includes('-r') || args.includes('--recursive');
+    const cached = args.includes('--cached');
+    const force = args.includes('-f') || args.includes('--force');
+    
+    // Filter out flags
+    const files = args.filter(arg => !arg.startsWith('-'));
+    
+    if (files.length === 0) {
+        printError('fatal: No pathspec was given. Which files should I remove?');
+        return;
+    }
+    
+    try {
+        for (const file of files) {
+            const filepath = resolvePath(file);
+            const relPath = filepath.replace(dir + '/', '');
+            
+            // Check if file exists
+            try {
+                const stat = await fs.promises.stat(filepath);
+                
+                if (stat.isDirectory() && !recursive) {
+                    printError(`fatal: not removing '${file}' recursively without -r`);
+                    continue;
+                }
+                
+                // Remove from git index
+                await git.remove({ fs, dir, filepath: relPath });
+                printNormal(`rm '${file}'`);
+                
+                // Remove from filesystem (unless --cached)
+                if (!cached) {
+                    if (stat.isDirectory()) {
+                        await removeDirectory(filepath);
+                    } else {
+                        await fs.promises.unlink(filepath);
+                    }
+                }
+            } catch (error) {
+                printError(`fatal: pathspec '${file}' did not match any files`);
+            }
+        }
+        
+        if (!cached) {
+            printHint('Files removed from working directory and staging area');
+        } else {
+            printHint('Files removed from staging area only (use --cached to keep in working directory)');
+        }
+    } catch (error) {
+        printError(`Error: ${error.message}`);
+    }
+}
+
+async function gitMv(args) {
+    if (args.length < 2) {
+        printError('fatal: bad source or destination');
+        printHint('Usage: git mv <source> <destination>');
+        return;
+    }
+    
+    const dir = await git.findRoot({ fs, filepath: currentDir });
+    const source = args[0];
+    const dest = args[1];
+    
+    const sourcePath = resolvePath(source);
+    const destPath = resolvePath(dest);
+    const relSource = sourcePath.replace(dir + '/', '');
+    const relDest = destPath.replace(dir + '/', '');
+    
+    try {
+        // Check if source exists
+        const stat = await fs.promises.stat(sourcePath);
+        
+        // Read source content
+        const content = await fs.promises.readFile(sourcePath, 'utf8');
+        
+        // Write to destination
+        await fs.promises.writeFile(destPath, content);
+        
+        // Remove from git index (old path)
+        await git.remove({ fs, dir, filepath: relSource });
+        
+        // Add to git index (new path)
+        await git.add({ fs, dir, filepath: relDest });
+        
+        // Remove old file
+        await fs.promises.unlink(sourcePath);
+        
+        printNormal(`Renamed ${source} -> ${dest}`);
+        printHint('File has been moved/renamed and staged for commit');
+    } catch (error) {
+        printError(`fatal: ${error.message}`);
+        printHint('Make sure the source file exists and the destination is valid');
+    }
+}
+
+async function gitMerge(args) {
+    if (args.length === 0) {
+        printError('fatal: No remote for the current branch.');
+        printHint('Usage: git merge <branch>');
+        return;
+    }
+    
+    const dir = await git.findRoot({ fs, filepath: currentDir });
+    const branchToMerge = args[0];
+    
+    try {
+        const branches = await git.listBranches({ fs, dir });
+        if (!branches.includes(branchToMerge)) {
+            printError(`error: pathspec '${branchToMerge}' did not match any file(s) known to git`);
+            return;
+        }
+        
+        const currentBranch = await git.currentBranch({ fs, dir });
+        
+        await git.merge({ fs, dir, ours: currentBranch, theirs: branchToMerge, author: { name: 'Student', email: 'student@example.com' } });
+        
+        printNormal(`Merge made by the 'recursive' strategy.`);
+        printNormal(`Merged branch '${branchToMerge}' into ${currentBranch}`);
+        printHint('Files from the merged branch are now in your working directory');
+    } catch (error) {
+        if (error.code === 'MergeNotSupportedError') {
+            printError('Merge conflicts detected!');
+            printHint('This learning environment has limited merge conflict resolution support');
+            printHint('In a real scenario, you would need to resolve conflicts manually and commit');
+        } else {
+            printError(`Error: ${error.message}`);
+        }
+    }
+}
+
+async function gitTag(args) {
+    const dir = await git.findRoot({ fs, filepath: currentDir });
+    
+    if (args.length === 0) {
+        // List tags
+        try {
+            const tags = await git.listTags({ fs, dir });
+            if (tags.length === 0) {
+                printHint('No tags found. Create one with: git tag <tagname>');
+            } else {
+                tags.forEach(tag => printNormal(tag));
+            }
+        } catch (error) {
+            printError(`Error: ${error.message}`);
+        }
+        return;
+    }
+    
+    const tagName = args[0];
+    const hasMessage = args.includes('-m') || args.includes('-a');
+    let message = '';
+    
+    if (hasMessage) {
+        const msgIndex = args.indexOf('-m') !== -1 ? args.indexOf('-m') : args.indexOf('-a');
+        message = args[msgIndex + 1] || '';
+    }
+    
+    // Delete tag
+    if (args.includes('-d')) {
+        try {
+            await git.deleteTag({ fs, dir, ref: tagName });
+            printNormal(`Deleted tag '${tagName}'`);
+        } catch (error) {
+            printError(`error: tag '${tagName}' not found.`);
+        }
+        return;
+    }
+    
+    // Create tag
+    try {
+        await git.tag({ fs, dir, ref: tagName, object: await git.resolveRef({ fs, dir, ref: 'HEAD' }) });
+        printNormal(`Created tag '${tagName}'`);
+        printHint('Tags are useful for marking release points (v1.0, v2.0, etc.)');
+    } catch (error) {
+        printError(`Error: ${error.message}`);
+    }
+}
+
+async function gitShow(args) {
+    const dir = await git.findRoot({ fs, filepath: currentDir });
+    
+    try {
+        let ref = 'HEAD';
+        if (args.length > 0) {
+            ref = args[0];
+        }
+        
+        const oid = await git.resolveRef({ fs, dir, ref });
+        const commit = await git.readCommit({ fs, dir, oid });
+        
+        printNormal(`\x1b[33mcommit ${oid}\x1b[0m`);
+        printNormal(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+        printNormal(`Date:   ${new Date(commit.commit.author.timestamp * 1000).toString()}`);
+        printNormal('');
+        printNormal(`    ${commit.commit.message}`);
+        printNormal('');
+        
+        printHint('Use git show <commit-hash> to view specific commits');
+    } catch (error) {
+        printError(`fatal: ${error.message}`);
+    }
+}
+
+async function gitFetch(args) {
+    printNormal('Fetching origin...');
+    printNormal('remote: Counting objects: 5, done.');
+    printNormal('remote: Compressing objects: 100% (3/3), done.');
+    printNormal('remote: Total 5 (delta 2), reused 5 (delta 2)');
+    printNormal('Unpacking objects: 100% (5/5), done.');
+    printNormal('From https://github.com/student/project');
+    printNormal('   abc1234..def5678  main       -> origin/main');
+    printHint('Fetch downloads objects and refs from another repository');
+    printHint('Unlike pull, fetch does not merge changes into your working directory');
+}
+
+async function gitStash(args) {
+    const dir = await git.findRoot({ fs, filepath: currentDir });
+    
+    if (args.length === 0 || args[0] === 'push') {
+        printNormal('Saved working directory and index state WIP on main: Latest commit');
+        printHint('Stash saves your local modifications away and reverts to a clean working directory');
+        printHint('Use "git stash pop" to restore your changes');
+        printHint('Note: This learning environment has limited stash support');
+        return;
+    }
+    
+    if (args[0] === 'list') {
+        printNormal('stash@{0}: WIP on main: abc1234 Latest commit');
+        printHint('This shows saved stashes (simulated in learning environment)');
+        return;
+    }
+    
+    if (args[0] === 'pop') {
+        printNormal('On branch main');
+        printNormal('Changes not staged for commit:');
+        printNormal('  modified:   file.txt');
+        printNormal('Dropped refs/stash@{0}');
+        printHint('Stash pop applies the most recent stash and removes it from the stash list');
+        return;
+    }
+    
+    printError(`Unknown stash subcommand: ${args[0]}`);
+    printHint('Available: git stash [push|pop|list]');
+}
+
+async function gitConfig(args) {
+    const dir = await git.findRoot({ fs, filepath: currentDir });
+    
+    if (args.length === 0) {
+        printError('usage: git config [<options>]');
+        printHint('Common: git config user.name "Your Name"');
+        printHint('        git config user.email "your@email.com"');
+        printHint('        git config --list (to view all settings)');
+        return;
+    }
+    
+    if (args[0] === '--list' || args[0] === '-l') {
+        try {
+            const userName = await git.getConfig({ fs, dir, path: 'user.name' }) || 'Student';
+            const userEmail = await git.getConfig({ fs, dir, path: 'user.email' }) || 'student@example.com';
+            printNormal(`user.name=${userName}`);
+            printNormal(`user.email=${userEmail}`);
+            printHint('These settings identify you in commits');
+        } catch (error) {
+            printError(`Error: ${error.message}`);
+        }
+        return;
+    }
+    
+    // Set config
+    if (args.length >= 2) {
+        const key = args[0];
+        const value = args[1];
+        
+        try {
+            await git.setConfig({ fs, dir, path: key, value });
+            printNormal(`Set ${key} = ${value}`);
+            printHint('Configuration updated successfully');
+        } catch (error) {
+            printError(`Error: ${error.message}`);
+        }
+    } else {
+        // Get config
+        try {
+            const value = await git.getConfig({ fs, dir, path: args[0] });
+            if (value) {
+                printNormal(value);
+            } else {
+                printError(`No value found for ${args[0]}`);
+            }
+        } catch (error) {
+            printError(`Error: ${error.message}`);
+        }
+    }
 }
 
 // File tree management
@@ -1307,6 +1858,25 @@ async function handleTabCompletion() {
     if (parts.length === 1) {
         const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'clear', 'reset', 'history', 'grep', 'vi', 'vim', 'nano', 'edit', 'git'];
         const matches = commands.filter(cmd => cmd.startsWith(lastPart));
+        
+        if (matches.length === 1) {
+            const completion = matches[0].substring(lastPart.length);
+            currentLine += completion + ' ';
+            cursorPos = currentLine.length;
+            term.write(completion + ' ');
+        } else if (matches.length > 1) {
+            term.write('\r\n');
+            term.writeln(matches.join('  '));
+            showPromptInline();
+            term.write(currentLine);
+        }
+        return;
+    }
+    
+    // Git subcommand completion
+    if (parts.length === 2 && parts[0] === 'git') {
+        const gitCommands = ['init', 'status', 'add', 'commit', 'log', 'branch', 'checkout', 'diff', 'reset', 'rm', 'mv', 'merge', 'tag', 'show', 'fetch', 'stash', 'config', 'clone', 'push', 'pull', 'remote'];
+        const matches = gitCommands.filter(cmd => cmd.startsWith(lastPart));
         
         if (matches.length === 1) {
             const completion = matches[0].substring(lastPart.length);
@@ -1559,6 +2129,23 @@ document.getElementById('resetBtn').addEventListener('click', async () => {
         showPrompt();
     }
 });
+
+// Debug function - expose to window for console testing
+window.debugGit = function() {
+    console.log('=== Git Debug Info ===');
+    console.log('window.git:', !!window.git);
+    console.log('window.git.http:', !!window.git?.http);
+    console.log('window.GitHttp:', !!window.GitHttp);
+    console.log('http variable:', !!http);
+    console.log('git.version:', git.version?.());
+    console.log('fs:', !!fs);
+    console.log('LightningFS:', !!window.LightningFS);
+    
+    // Try to list what's on window.git
+    if (window.git) {
+        console.log('window.git keys:', Object.keys(window.git).slice(0, 20));
+    }
+};
 
 // Initialize when page loads
 init();

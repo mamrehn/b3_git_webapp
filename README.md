@@ -7,11 +7,13 @@ An interactive web-based terminal application for learning Git commands in a saf
 ### 🎯 Core Functionality
 - **Full Terminal Emulation**: Powered by xterm.js for a realistic terminal experience
 - **Git Operations**: Implemented using isomorphic-git for authentic Git behavior
+- **🆕 Real GitHub Integration**: Automatically clones actual repositories from GitHub using CORS proxy
 - **In-Browser File System**: Uses LightningFS (IndexedDB) for persistent storage within the session
 - **Safe Learning Environment**: Nothing can break - resets on page reload
 
 ### 📁 File System Commands
 - `ls` - List directory contents (use `-a` for hidden files)
+- `ll` - Alias for `ls -la` (list all with details)
 - `cd` - Change directory
 - `pwd` - Print working directory
 - `cat` - Display file contents
@@ -19,35 +21,67 @@ An interactive web-based terminal application for learning Git commands in a saf
 - `touch` - Create empty files
 - `rm` - Remove files
 - `vi/vim/nano/edit` - Open the built-in text editor
+- `history` - Show command history
+- `clear` - Clear terminal screen
+- `reset` - Reset filesystem to initial state
 
 ### 🔧 Git Commands
+**Repository Setup & Configuration**
 - `git init` - Initialize a repository
+- `git config` - Get and set configuration options
+
+**Basic Snapshotting**
 - `git status` - Show working tree status
 - `git add` - Stage files
 - `git commit` - Commit changes
-- `git log` - View commit history
-- `git branch` - List/create branches
-- `git checkout` - Switch branches
 - `git diff` - Show changes
 - `git reset` - Unstage files
+- `git rm` - Remove files from working tree and index
+- `git mv` - Move or rename files
+
+**Branching & Merging**
+- `git branch` - List/create branches
+- `git checkout` - Switch branches
+- `git merge` - Merge branches
+
+**Inspecting & Comparing**
+- `git log` - View commit history
+- `git show` - Show commit details
+- `git tag` - Create or list tags
+
+**Sharing & Updating**
 - `git remote` - Manage remotes (simulated)
-- `git push/pull` - Simulate remote operations
-- `git clone` - Simulate cloning (educational)
+- `git fetch` - Download objects from remote (simulated)
+- `git push` - Push to remote (simulated)
+- `git pull` - Pull from remote (simulated)
+- `git clone` - Clone repository (simulated)
+
+**Temporary Commits**
+- `git stash` - Stash changes (simulated)
 
 ### 🎨 Learning Features
 - **Color-Coded Output**:
   - White text: Standard Git output
   - Green text: Educational hints and tips
+  - Red text: Errors and warnings
 - **Contextual Hints**: Automatic hints after commands to guide learning
-- **File Tree View**: Real-time visualization of the project structure
+- **File Tree View**: Real-time visualization of the project structure with clickable files
+- **Syntax Highlighting**: Code editor with support for HTML, CSS, JavaScript, Python, Markdown, and Shell
 - **Hidden Files Display**: Shows `.git/`, `.gitignore`, etc. (but not `.git/` contents)
-- **Console-Based Editor**: Simple text editor for file modifications
+- **Advanced Terminal Features**:
+  - Tab completion for commands and files
+  - Command history navigation (↑/↓ arrow keys)
+  - Reverse history search (Ctrl+R)
+  - Cursor positioning (←/→ arrow keys)
+  - Pipe support for filtering (`history | grep pattern`)
 
 ### 📚 Pre-configured Projects
-- **project1**: Pre-initialized repository with commit history
-  - Contains `index.html` and `style.css`
-  - Multiple commits demonstrating Git workflow
-  - Includes `.gitignore` file
+- **project1**: 🆕 **Cloned from real GitHub repository!**
+  - Automatically clones `https://github.com/mamrehn/project1.git`
+  - Real commit history from GitHub
+  - Authentic Git repository experience
+  - Uses CORS proxy for browser access
+  - Falls back to sample project if cloning fails
 - **project2**: Empty directory for students to initialize themselves
 
 ## Installation
