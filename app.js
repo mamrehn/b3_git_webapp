@@ -1101,8 +1101,14 @@ async function gitLog(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
         
+        // Parse flags
+        const showGraph = args.includes('--graph');
+        const showOneline = args.includes('--oneline');
+        const showAll = args.includes('--all');
+        const showDecorate = args.includes('--decorate') || showOneline;
+        
         // Support --all flag for more commits
-        const depth = args.includes('--all') ? 100 : 20;
+        const depth = showAll ? 100 : 20;
         
         const commits = await git.log({ 
             fs, 
@@ -1117,29 +1123,213 @@ async function gitLog(args) {
             return;
         }
         
+        // Get current branch for decoration
+        let currentBranch = '';
+        try {
+            currentBranch = await git.currentBranch({ fs, dir });
+        } catch (e) {
+            // Ignore if can't get branch
+        }
+        
+        // Get all branches for decoration
+        let branches = [];
+        try {
+            branches = await git.listBranches({ fs, dir });
+        } catch (e) {
+            // Ignore if can't get branches
+        }
+        
         printNormal('');
-        commits.forEach(commit => {
-            term.writeln(`\x1b[33mcommit ${commit.oid}\x1b[0m`);
-            term.writeln(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+        
+        if (showOneline) {
+            // Git's standard color palette for graph
+            const graphColors = [
+                '\x1b[33m',  // Yellow
+                '\x1b[32m',  // Green
+                '\x1b[34m',  // Blue
+                '\x1b[36m',  // Cyan
+                '\x1b[31m',  // Red
+                '\x1b[35m',  // Magenta
+            ];
             
-            // Format date properly
-            const date = new Date(commit.commit.author.timestamp * 1000);
-            const dateStr = date.toString();
-            term.writeln(`Date:   ${dateStr}`);
-            term.writeln(``);
+            // Get all branch tips for decoration
+            const branchTips = new Map();
+            for (const branch of branches) {
+                try {
+                    const oid = await git.resolveRef({ fs, dir, ref: branch });
+                    if (!branchTips.has(oid)) {
+                        branchTips.set(oid, []);
+                    }
+                    branchTips.get(oid).push(branch);
+                } catch (e) {
+                    // Ignore errors
+                }
+            }
             
-            // Handle multi-line commit messages
-            const messageLines = commit.commit.message.trim().split('\n');
-            messageLines.forEach(line => {
-                term.writeln(`    ${line}`);
+            // Compact one-line format
+            commits.forEach((commit, index) => {
+                const shortHash = commit.oid.substring(0, 7);
+                const firstLine = commit.commit.message.split('\n')[0];
+                
+                // Use rotating colors for graph
+                const colorIndex = index % graphColors.length;
+                const color = graphColors[colorIndex];
+                const reset = '\x1b[0m';
+                
+                // Build decoration (standard git colors)
+                let decoration = '';
+                const decorParts = [];
+                
+                if (showDecorate && index === 0 && currentBranch) {
+                    decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
+                }
+                
+                // Add other branches pointing to this commit
+                if (branchTips.has(commit.oid)) {
+                    const branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !index);
+                    branchNames.forEach(b => {
+                        decorParts.push(`\x1b[1;32m${b}\x1b[0m`);
+                    });
+                }
+                
+                if (decorParts.length > 0) {
+                    decoration = ` \x1b[33m(\x1b[0m${decorParts.join('\x1b[33m,\x1b[0m ')}\x1b[33m)\x1b[0m`;
+                }
+                
+                if (showGraph) {
+                    term.writeln(`${color}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                } else {
+                    term.writeln(`\x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                }
             });
-            term.writeln(``);
-        });
+        } else if (showGraph) {
+            // Graph format with ASCII art - now supports branches!
+            // Git's standard color palette for graph (rotating colors for visual distinction)
+            const graphColors = [
+                '\x1b[33m',  // Yellow (color 1)
+                '\x1b[32m',  // Green (color 2)
+                '\x1b[34m',  // Blue (color 3)
+                '\x1b[36m',  // Cyan (color 4)
+                '\x1b[31m',  // Red (color 5)
+                '\x1b[35m',  // Magenta (color 6)
+            ];
+            
+            // Build commit map for parent lookup
+            const commitMap = new Map();
+            commits.forEach(commit => {
+                commitMap.set(commit.oid, commit);
+            });
+            
+            // Get all branch tips for decoration
+            const branchTips = new Map();
+            for (const branch of branches) {
+                try {
+                    const oid = await git.resolveRef({ fs, dir, ref: branch });
+                    if (!branchTips.has(oid)) {
+                        branchTips.set(oid, []);
+                    }
+                    branchTips.get(oid).push(branch);
+                } catch (e) {
+                    // Ignore errors
+                }
+            }
+            
+            commits.forEach((commit, index) => {
+                const isFirst = index === 0;
+                const isLast = index === commits.length - 1;
+                const hasMergeParent = commit.commit.parent && commit.commit.parent.length > 1;
+                const nextCommit = index < commits.length - 1 ? commits[index + 1] : null;
+                
+                // Use color based on commit depth for visual variety
+                const colorIndex = index % graphColors.length;
+                const color = graphColors[colorIndex];
+                const reset = '\x1b[0m';
+                
+                // Build decoration (standard git colors)
+                let decoration = '';
+                const decorParts = [];
+                
+                if (isFirst && currentBranch) {
+                    // HEAD is cyan, arrow is yellow, branch is green
+                    decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
+                }
+                
+                // Add other branches pointing to this commit
+                if (branchTips.has(commit.oid)) {
+                    const branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !isFirst);
+                    branchNames.forEach(b => {
+                        // Branch names in bold green
+                        decorParts.push(`\x1b[1;32m${b}\x1b[0m`);
+                    });
+                }
+                
+                if (decorParts.length > 0) {
+                    decoration = ` \x1b[33m(\x1b[0m${decorParts.join('\x1b[33m,\x1b[0m ')}\x1b[33m)\x1b[0m`;
+                }
+                
+                // Determine graph characters with appropriate color
+                let graphPrefix = `${color}*${reset}`;
+                let linePrefix = `${color}|${reset}`;
+                
+                // Check if this is a merge commit
+                if (hasMergeParent) {
+                    // After merge, show merge lines
+                    const nextLine = nextCommit ? `${color}|\\${reset}` : '  ';
+                    
+                    // Commit line with merge indicator
+                    term.writeln(`${graphPrefix}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
+                    term.writeln(`${nextLine}   Merge: ${commit.commit.parent.map(p => p.substring(0, 7)).join(' ')}`);
+                    term.writeln(`${linePrefix}   Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                } else {
+                    // Regular commit
+                    term.writeln(`${graphPrefix}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
+                    term.writeln(`${isLast ? '  ' : linePrefix}   Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                }
+                
+                // Format date properly
+                const date = new Date(commit.commit.author.timestamp * 1000);
+                const dateStr = date.toString();
+                term.writeln(`${isLast ? '  ' : linePrefix}   Date:   ${dateStr}`);
+                term.writeln(`${isLast ? '  ' : linePrefix}`);
+                
+                // Handle multi-line commit messages
+                const messageLines = commit.commit.message.trim().split('\n');
+                messageLines.forEach(line => {
+                    term.writeln(`${isLast ? '  ' : linePrefix}       ${line}`);
+                });
+                
+                term.writeln(`${isLast ? '' : linePrefix}`);
+            });
+        } else {
+            // Standard format
+            commits.forEach((commit, index) => {
+                let decoration = '';
+                if (showDecorate && index === 0 && currentBranch) {
+                    decoration = ` \x1b[33m(\x1b[36mHEAD -> \x1b[32m${currentBranch}\x1b[33m)\x1b[0m`;
+                }
+                
+                term.writeln(`\x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
+                term.writeln(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
+                
+                // Format date properly
+                const date = new Date(commit.commit.author.timestamp * 1000);
+                const dateStr = date.toString();
+                term.writeln(`Date:   ${dateStr}`);
+                term.writeln(``);
+                
+                // Handle multi-line commit messages
+                const messageLines = commit.commit.message.trim().split('\n');
+                messageLines.forEach(line => {
+                    term.writeln(`    ${line}`);
+                });
+                term.writeln(``);
+            });
+        }
         
         if (commits.length >= depth) {
             printHint(`Showing last ${depth} commits. Use "git log --all" to see more`);
         } else {
-            printHint('Use "git show <commit-hash>" to see details of a specific commit');
+            printHint('Use "git log --graph --oneline" for a compact graph view');
         }
     } catch (error) {
         printError(`git log failed: ${error.message}`);
