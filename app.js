@@ -380,7 +380,8 @@ function printNormal(text) {
 
 function printHint(text) {
     // Use bright blue (1;94m) for hints - stands out and doesn't conflict with git colors
-    term.writeln(`\r\n\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: ${text}\x1b[0m`);
+    // No leading newline - hints should be grouped together
+    term.writeln(`\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: ${text}\x1b[0m`);
 }
 
 function printError(text) {
@@ -709,7 +710,8 @@ async function cmdLs(args) {
             return;
         }
         
-        printNormal('');
+        // Print file list without leading newline
+        term.writeln('');
         filtered.forEach(file => {
             const color = file.isDirectory ? '\x1b[34m' : '\x1b[0m';
             const suffix = file.isDirectory ? '/' : '';
@@ -717,7 +719,9 @@ async function cmdLs(args) {
             term.writeln(`${hiddenColor}${color}${file.name}${suffix}\x1b[0m`);
         });
         
+        // Add spacing before hint
         if (!showHidden && fileInfos.some(f => f.isHidden)) {
+            term.writeln('');
             printHint('Use "ls -a" to show hidden files (like .git)');
         }
     } catch (error) {
@@ -821,7 +825,7 @@ async function cmdMkdir(args) {
     
     try {
         await pfs.mkdir(dirpath, { recursive: true });
-        printNormal(`Directory created: ${dirname}`);
+        // Directory created silently, like in real terminals
     } catch (error) {
         printError(`mkdir: cannot create directory '${dirname}': ${error.message}`);
     }
@@ -1989,6 +1993,7 @@ async function gitClone(args) {
         await pfs.mkdir(targetPath, { recursive: true });
         
         // Clone the repository (fetch all branches by default)
+        let lastPhase = '';
         await git.clone({
             fs,
             http: httpModule,
@@ -2000,11 +2005,18 @@ async function gitClone(args) {
             onProgress: (event) => {
                 if (event.phase === 'Receiving objects' || event.phase === 'Resolving deltas') {
                     const percent = event.total ? Math.round((event.loaded / event.total) * 100) : '?';
-                    printNormal(`${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
+                    // Only show every 25% or when phase changes to reduce output
+                    if (event.phase !== lastPhase || percent === 100 || percent % 25 === 0) {
+                        term.write(`\r${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
+                        if (percent === 100) {
+                            term.write('\r\n');
+                            lastPhase = event.phase;
+                        }
+                    }
                 }
             },
             onMessage: (message) => {
-                printNormal(`remote: ${message}`);
+                term.write(`\rremote: ${message}\r\n`);
             },
             onAuth: () => {
                 // For public repos, no auth needed
@@ -2016,10 +2028,10 @@ async function gitClone(args) {
         await git.setConfig({ fs, dir: targetPath, path: 'user.name', value: 'Student' });
         await git.setConfig({ fs, dir: targetPath, path: 'user.email', value: 'student@example.com' });
         
-        printNormal('');
         printNormal(`\x1b[32m✓ Successfully cloned repository!\x1b[0m`);
+        term.writeln(''); // Blank line before hints
         printHint(`cd ${repoName} && git log --graph --oneline to explore the history`);
-        printHint('Note: Large repositories may take some time. Using shallow clone (depth=10) for performance.');
+        printHint('Large repositories may take some time. Using shallow clone for performance.');
         
     } catch (error) {
         printError(`Failed to clone repository: ${error.message}`);
@@ -2215,17 +2227,17 @@ async function gitMerge(args) {
             // Handle merge conflicts
             printError('CONFLICT (content): Merge conflict detected');
             printNormal('Automatic merge failed; fix conflicts and then commit the result.');
-            printNormal('');
             
             // Show conflicted files if available
             if (error.data && error.data.filepaths) {
+                printNormal('');
                 printNormal('Conflicted files:');
                 error.data.filepaths.forEach(filepath => {
                     printError(`  ${filepath}`);
                 });
-                printNormal('');
             }
             
+            term.writeln(''); // Blank line before hints
             printHint('To resolve conflicts:');
             printHint('  1. Edit the conflicted files (look for <<<<<<< markers)');
             printHint('  2. Remove conflict markers and choose the correct content');
@@ -2352,6 +2364,7 @@ async function gitFetch(args) {
         
         try {
             // Fetch from remote
+            let lastPhase = '';
             const fetchResult = await git.fetch({
                 fs,
                 http: httpModule,
@@ -2365,18 +2378,24 @@ async function gitFetch(args) {
                 onProgress: (event) => {
                     if (event.phase === 'Receiving objects' || event.phase === 'Resolving deltas') {
                         const percent = event.total ? Math.round((event.loaded / event.total) * 100) : '?';
-                        printNormal(`${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
+                        // Only show every 25% or when phase changes to reduce output
+                        if (event.phase !== lastPhase || percent === 100 || percent % 25 === 0) {
+                            term.write(`\r${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
+                            if (percent === 100) {
+                                term.write('\r\n');
+                                lastPhase = event.phase;
+                            }
+                        }
                     }
                 },
                 onMessage: (message) => {
-                    printNormal(`remote: ${message}`);
+                    term.write(`\rremote: ${message}\r\n`);
                 },
                 onAuth: () => {
                     return { username: '', password: '' };
                 }
             });
             
-            printNormal('');
             printNormal(`From ${remoteUrl}`);
             
             // List fetched branches
@@ -2388,8 +2407,8 @@ async function gitFetch(args) {
                 });
             }
             
-            printNormal('');
             printNormal('\x1b[32m✓ Fetch complete!\x1b[0m');
+            term.writeln(''); // Blank line before hints
             printHint('Use "git branch -r" to see remote branches');
             printHint('Use "git checkout <branch>" to switch to a fetched branch');
             
@@ -2515,11 +2534,15 @@ async function updateFileTree() {
                 const filepath = fileElement.getAttribute('data-filepath');
                 const filename = filepath.split('/').pop();
                 
+                // Echo the command to terminal
+                term.write(`edit ${filename}`);
+                
                 try {
                     const content = await pfs.readFile(filepath, 'utf8');
                     editorFile = filepath;
                     editorOriginalContent = content;
                     openEditor(filename, content);
+                    term.writeln('\r\n');
                     printHint(`Opened ${filename} in editor. Edit and use Ctrl+S to save, Ctrl+X to close.`);
                 } catch (error) {
                     printError(`Error opening file: ${error.message}`);
@@ -2532,9 +2555,12 @@ async function updateFileTree() {
         clickableDirs.forEach(dirElement => {
             dirElement.addEventListener('click', async () => {
                 const dirpath = dirElement.getAttribute('data-dirpath');
+                
+                // Echo the cd command to terminal
+                term.write(`cd ${dirpath.replace('/home/student', '~')}`);
+                
                 currentDir = dirpath;
                 await updateFileTree();
-                printNormal(`Changed directory to ${currentDir.replace('/home/student', '~')}`);
                 showPrompt();
             });
         });
@@ -2694,8 +2720,8 @@ async function saveEditor() {
     
     try {
         await pfs.writeFile(editorFile, content, 'utf8');
-        printNormal(`File saved: ${editorFile.split('/').pop()}`);
         printHint('File saved successfully. Changes are now in your working directory.');
+        printHint('Use "git status" to stage the changes, or "git diff" to see what changed.');
         await updateFileTree();
     } catch (error) {
         printError(`Error saving file: ${error.message}`);
