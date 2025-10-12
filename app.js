@@ -2394,6 +2394,18 @@ async function updateFileTree() {
                 }
             });
         });
+        
+        // Add click handlers to directories
+        const clickableDirs = treeContainer.querySelectorAll('.clickable-dir');
+        clickableDirs.forEach(dirElement => {
+            dirElement.addEventListener('click', async () => {
+                const dirpath = dirElement.getAttribute('data-dirpath');
+                currentDir = dirpath;
+                await updateFileTree();
+                printNormal(`Changed directory to ${currentDir.replace('/home/student', '~')}`);
+                showPrompt();
+            });
+        });
     } catch (error) {
         treeContainer.innerHTML = `<div style="color: #f44;">Error loading file tree</div>`;
     }
@@ -2429,11 +2441,11 @@ async function buildFileTree(path, indent = 0) {
             if (file.isDirectory) {
                 // Don't show contents of .git folder
                 if (file.name === '.git') {
-                    html += `<div class="tree-folder ${hiddenClass}" style="margin-left: ${indent * 15}px">`;
+                    html += `<div class="tree-folder ${hiddenClass} clickable-dir" data-dirpath="${file.path}" style="margin-left: ${indent * 15}px; cursor: pointer;">`;
                     html += `<span class="folder-icon"></span>${file.name}/`;
                     html += `</div>`;
                 } else {
-                    html += `<div class="tree-folder ${hiddenClass}" style="margin-left: ${indent * 15}px">`;
+                    html += `<div class="tree-folder ${hiddenClass} clickable-dir" data-dirpath="${file.path}" style="margin-left: ${indent * 15}px; cursor: pointer;">`;
                     html += `<span class="folder-icon"></span>${file.name}/`;
                     html += `</div>`;
                     html += await buildFileTree(file.path, indent + 1);
