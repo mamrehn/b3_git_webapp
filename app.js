@@ -2159,16 +2159,81 @@ async function gitPush(args) {
             return;
         }
         
-        // Simulated push
-        printNormal('Counting objects: 5, done.');
-        printNormal('Compressing objects: 100% (3/3), done.');
-        printNormal('Writing objects: 100% (5/5), 456 bytes | 456.00 KiB/s, done.');
-        printNormal('Total 5 (delta 0), reused 0 (delta 0)');
-        printNormal('To ' + remotes[0].url);
-        printNormal('   a1b2c3d..e4f5g6h  main -> main');
-        printHint('Push simulated! In a real scenario, this would upload your commits to a remote server');
+        // Get HTTP module
+        const httpModule = window.GitHttp || window.git?.http;
+        if (!httpModule) {
+            printError('HTTP module not loaded. Cannot push to remote repositories.');
+            printHint('Push functionality requires the isomorphic-git HTTP module');
+            return;
+        }
+        
+        // Parse arguments
+        const remote = args.find(arg => !arg.startsWith('-')) || 'origin';
+        const force = args.includes('-f') || args.includes('--force');
+        
+        // Get current branch
+        const currentBranch = await git.currentBranch({ fs, dir }) || 'main';
+        const ref = args.find(arg => arg.includes(':')) || `refs/heads/${currentBranch}:refs/heads/${currentBranch}`;
+        
+        printNormal(`Pushing to ${remotes[0].url}...`);
+        
+        try {
+            // Attempt to push (this will fail without authentication for private repos)
+            const result = await git.push({
+                fs,
+                http: httpModule,
+                dir,
+                remote,
+                ref,
+                force,
+                corsProxy: 'https://cors.isomorphic-git.org',
+                onAuth: () => {
+                    // For learning purposes, we'll use a callback that explains auth
+                    printNormal('');
+                    printError('Authentication required!');
+                    printHint('Pushing to GitHub requires authentication. For this learning environment:');
+                    printHint('1. You can push to public repos you own (if you fork them)');
+                    printHint('2. For private repos, you would need a GitHub Personal Access Token');
+                    printHint('3. In real development, use SSH keys or credential managers');
+                    return { cancel: true };
+                },
+                onAuthFailure: () => {
+                    printError('Authentication failed or cancelled');
+                    return { cancel: true };
+                },
+                onMessage: (message) => {
+                    if (message) {
+                        printNormal(message);
+                    }
+                }
+            });
+            
+            printNormal('');
+            printNormal(`To ${remotes[0].url}`);
+            printNormal(`   ${result.ok ? '✓' : '✗'} ${currentBranch} -> ${currentBranch}`);
+            printHint('Push successful! Your commits are now on the remote server');
+            
+        } catch (error) {
+            // Handle specific error cases
+            if (error.message?.includes('401') || error.message?.includes('403')) {
+                printError('Authentication failed or access denied');
+                printHint('For public repos: Make sure the repository exists and you have push access');
+                printHint('For private repos: You need a GitHub Personal Access Token');
+                printHint('This learning environment works best with local operations');
+            } else if (error.message?.includes('404')) {
+                printError('Repository not found');
+                printHint('Make sure the remote URL is correct and the repository exists');
+            } else if (error.message?.includes('non-fast-forward')) {
+                printError('Updates were rejected (non-fast-forward)');
+                printHint('The remote has commits you don\'t have locally');
+                printHint('Pull first with "git pull", or force push with "git push -f" (dangerous!)');
+            } else {
+                throw error;
+            }
+        }
     } catch (error) {
         printError(`git push failed: ${error.message}`);
+        printHint('Note: Pushing to remote servers has limitations in browser environments');
     }
 }
 
@@ -2183,13 +2248,129 @@ async function gitPull(args) {
             return;
         }
         
-        // Simulated pull
-        printNormal('From ' + remotes[0].url);
-        printNormal(' * branch            main       -> FETCH_HEAD');
-        printNormal('Already up to date.');
-        printHint('Pull simulated! In a real scenario, this would download changes from a remote server');
+        // Get HTTP module
+        const httpModule = window.GitHttp || window.git?.http;
+        if (!httpModule) {
+            printError('HTTP module not loaded. Cannot pull from remote repositories.');
+            printHint('Pull functionality requires the isomorphic-git HTTP module');
+            return;
+        }
+        
+        // Parse arguments
+        const remote = args.find(arg => !arg.startsWith('-')) || 'origin';
+        const currentBranch = await git.currentBranch({ fs, dir }) || 'main';
+        
+        printNormal(`Fetching from ${remotes[0].url}...`);
+        
+        try {
+            // First, fetch from remote
+            await git.fetch({
+                fs,
+                http: httpModule,
+                dir,
+                remote,
+                ref: currentBranch,
+                corsProxy: 'https://cors.isomorphic-git.org',
+                singleBranch: true,
+                tags: false,
+                onProgress: (event) => {
+                    const percent = Math.round((event.loaded / (event.total || event.loaded)) * 100);
+                    if (percent === 100 || percent % 25 === 0) {
+                        term.write(`\r${event.phase}: ${percent}%...`);
+                        if (percent === 100) {
+                            term.write('\r\n');
+                        }
+                    }
+                },
+                onMessage: (message) => {
+                    if (message) {
+                        printNormal(message);
+                    }
+                }
+            });
+            
+            printNormal('From ' + remotes[0].url);
+            printNormal(` * branch            ${currentBranch}       -> FETCH_HEAD`);
+            
+            // Get the remote branch OID
+            let remoteBranchOid;
+            try {
+                remoteBranchOid = await git.resolveRef({ 
+                    fs, 
+                    dir, 
+                    ref: `refs/remotes/${remote}/${currentBranch}` 
+                });
+            } catch (e) {
+                printError('Could not find remote branch');
+                printHint(`Make sure the branch "${currentBranch}" exists on the remote`);
+                return;
+            }
+            
+            // Get the current branch OID
+            const currentOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+            
+            // Check if already up to date
+            if (currentOid === remoteBranchOid) {
+                printNormal('Already up to date.');
+                return;
+            }
+            
+            // Check if it's a fast-forward merge
+            const canFastForward = await git.isDescendent({ 
+                fs, 
+                dir, 
+                oid: remoteBranchOid, 
+                ancestor: currentOid 
+            });
+            
+            if (canFastForward) {
+                // Fast-forward merge
+                await git.fastForward({
+                    fs,
+                    dir,
+                    ref: currentBranch,
+                    remote,
+                    singleBranch: true
+                });
+                
+                printNormal('Updating ' + currentOid.substring(0, 7) + '..' + remoteBranchOid.substring(0, 7));
+                printNormal('Fast-forward');
+                
+                // Show changed files
+                const commits = await git.log({ 
+                    fs, 
+                    dir, 
+                    ref: currentBranch,
+                    since: new Date(Date.now() - 1000 * 60 * 60 * 24) // Last 24 hours
+                });
+                
+                if (commits.length > 0) {
+                    const latestCommit = commits[0];
+                    printNormal(` ${latestCommit.commit.message.split('\n')[0]}`);
+                }
+                
+                printHint('Successfully pulled changes! Your local branch is now up to date');
+            } else {
+                printError('Cannot fast-forward. You have diverged from the remote branch.');
+                printHint('You need to merge the changes. Try: git merge origin/' + currentBranch);
+                printHint('Or, if you want to discard local changes: git reset --hard origin/' + currentBranch);
+            }
+            
+        } catch (error) {
+            if (error.message?.includes('401') || error.message?.includes('403')) {
+                printError('Authentication failed or access denied');
+                printHint('Public repositories should work without authentication');
+            } else if (error.message?.includes('404')) {
+                printError('Repository or branch not found');
+                printHint('Make sure the remote URL and branch name are correct');
+            } else {
+                throw error;
+            }
+        }
+        
     } catch (error) {
         printError(`git pull failed: ${error.message}`);
+        printHint('Note: Pulling from remote servers has limitations in browser environments');
     }
 }
 
