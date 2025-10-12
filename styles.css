@@ -338,8 +338,8 @@ body {
     background: #4e4e4e;
 }
 
-/* Fix lightbulb emoji spacing in xterm */
-.xterm .xterm-fg-2 {
+/* Fix emoji spacing in xterm - override negative letter-spacing for emoji characters */
+.xterm span[style*="letter-spacing"] {
     letter-spacing: 0px !important;
 }
 
