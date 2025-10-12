@@ -311,11 +311,11 @@ function printWelcome() {
     term.writeln('\r\n\x1b[36m╔════════════════════════════════════════════════════════════╗\x1b[0m');
     term.writeln('\x1b[36m║        Welcome to the Git Learning Terminal!               ║\x1b[0m');
     term.writeln('\x1b[36m╚════════════════════════════════════════════════════════════╝\x1b[0m');
-    term.writeln('\r\n\x1b[1;97m💡 \x1b[0m\x1b[1;97mHint: This is a safe learning environment. Try any git command!\x1b[0m');
-    term.writeln('\x1b[1;97m💡 \x1b[0m\x1b[1;97mHint: Type "help" for available commands.\x1b[0m');
-    term.writeln('\x1b[1;97m💡 \x1b[0m\x1b[1;97mHint: Edit files using "edit <filename>" or "vi <filename>".\x1b[0m');
-    term.writeln('\x1b[1;97m💡 \x1b[0m\x1b[1;97mHint: project1 is cloned from GitHub (mamrehn/project1)\x1b[0m');
-    term.writeln('\x1b[1;97m💡 \x1b[0m\x1b[1;97mHint: project2 is empty - You can initialize it with "git init"\x1b[0m\r\n');
+    term.writeln('\r\n\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: This is a safe learning environment. Try any git command!\x1b[0m');
+    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: Type "help" for available commands.\x1b[0m');
+    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: Edit files using "edit <filename>" or "vi <filename>".\x1b[0m');
+    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: project1 is cloned from GitHub (mamrehn/project1)\x1b[0m');
+    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: project2 is empty - You can initialize it with "git init"\x1b[0m\r\n');
 }
 
 function showPrompt() {
@@ -379,8 +379,8 @@ function printNormal(text) {
 }
 
 function printHint(text) {
-    // Use bright white (1;97m) for hints - doesn't conflict with git colors
-    term.writeln(`\r\n\x1b[1;97m💡 \x1b[0m\x1b[1;97mHint: ${text}\x1b[0m`);
+    // Use bright blue (1;94m) for hints - stands out and doesn't conflict with git colors
+    term.writeln(`\r\n\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: ${text}\x1b[0m`);
 }
 
 function printError(text) {
