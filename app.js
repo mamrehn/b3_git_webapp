@@ -997,17 +997,48 @@ async function gitInit(args) {
 async function gitStatus(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
+        
+        // Check if we're in the middle of a merge
+        let mergeInProgress = false;
+        try {
+            await pfs.stat(`${dir}/.git/MERGE_HEAD`);
+            mergeInProgress = true;
+        } catch (e) {
+            // Not in merge
+        }
+        
         const status = await git.statusMatrix({ fs, dir });
         
         printNormal('On branch main');
         
+        if (mergeInProgress) {
+            printError('You have unmerged paths.');
+            printNormal('  (fix conflicts and run "git commit")');
+            printNormal('  (use "git merge --abort" to abort the merge)');
+            printNormal('');
+        }
+        
         const staged = [];
         const modified = [];
         const untracked = [];
+        const conflicted = [];
         
         for (const [filepath, HEADStatus, workdirStatus, stageStatus] of status) {
             // Skip .git directory entries
             if (filepath.startsWith('.git/')) continue;
+            
+            // Check if file has conflict markers
+            if (mergeInProgress && workdirStatus === 2) {
+                try {
+                    const content = await pfs.readFile(`${dir}/${filepath}`, 'utf8');
+                    if (content.includes('<<<<<<<') && content.includes('=======') && content.includes('>>>>>>>')) {
+                        conflicted.push(filepath);
+                        continue;
+                    }
+                } catch (e) {
+                    // Ignore read errors
+                }
+            }
             
             // HEADStatus: 0 = absent, 1 = present
             // workdirStatus: 0 = absent, 1 = unchanged, 2 = modified
@@ -1024,10 +1055,22 @@ async function gitStatus(args) {
             }
         }
         
-        if (staged.length === 0 && modified.length === 0 && untracked.length === 0) {
-            printNormal('\nnothing to commit, working tree clean');
-            printHint('Your working directory is clean. Try modifying a file or creating a new one!');
+        if (staged.length === 0 && modified.length === 0 && untracked.length === 0 && conflicted.length === 0) {
+            if (!mergeInProgress) {
+                printNormal('\nnothing to commit, working tree clean');
+                printHint('Your working directory is clean. Try modifying a file or creating a new one!');
+            }
             return;
+        }
+        
+        if (conflicted.length > 0) {
+            printNormal('\nUnmerged paths:');
+            printNormal('  (use "git add <file>..." to mark resolution)');
+            printNormal('');
+            conflicted.forEach(file => {
+                term.writeln(`\t\x1b[31mboth modified:   ${file}\x1b[0m`);
+            });
+            printHint('Edit the files to resolve conflicts, then use "git add <file>" to mark as resolved');
         }
         
         if (staged.length > 0) {
@@ -2129,16 +2172,70 @@ async function gitMerge(args) {
         
         const currentBranch = await git.currentBranch({ fs, dir });
         
-        await git.merge({ fs, dir, ours: currentBranch, theirs: branchToMerge, author: { name: 'Student', email: 'student@example.com' } });
+        // Check for --abort flag
+        if (args.includes('--abort')) {
+            try {
+                // Read merge state
+                const mergeHeadPath = `${dir}/.git/MERGE_HEAD`;
+                await pfs.unlink(mergeHeadPath);
+                printNormal('Merge aborted.');
+                printHint('You are back to the state before the merge');
+                return;
+            } catch (e) {
+                printError('No merge in progress');
+                return;
+            }
+        }
+        
+        const result = await git.merge({ 
+            fs, 
+            dir, 
+            ours: currentBranch, 
+            theirs: branchToMerge, 
+            author: { name: 'Student', email: 'student@example.com' },
+            dryRun: false,
+            noUpdateBranch: false
+        });
+        
+        // Check if merge was successful
+        if (result && result.alreadyMerged) {
+            printNormal('Already up to date.');
+            return;
+        }
         
         printNormal(`Merge made by the 'recursive' strategy.`);
         printNormal(`Merged branch '${branchToMerge}' into ${currentBranch}`);
         printHint('Files from the merged branch are now in your working directory');
+        
     } catch (error) {
-        if (error.code === 'MergeNotSupportedError') {
-            printError('Merge conflicts detected!');
-            printHint('This learning environment has limited merge conflict resolution support');
-            printHint('In a real scenario, you would need to resolve conflicts manually and commit');
+        console.error('Merge error:', error);
+        
+        if (error.code === 'MergeNotSupportedError' || error.data) {
+            // Handle merge conflicts
+            printError('CONFLICT (content): Merge conflict detected');
+            printNormal('Automatic merge failed; fix conflicts and then commit the result.');
+            printNormal('');
+            
+            // Show conflicted files if available
+            if (error.data && error.data.filepaths) {
+                printNormal('Conflicted files:');
+                error.data.filepaths.forEach(filepath => {
+                    printError(`  ${filepath}`);
+                });
+                printNormal('');
+            }
+            
+            printHint('To resolve conflicts:');
+            printHint('  1. Edit the conflicted files (look for <<<<<<< markers)');
+            printHint('  2. Remove conflict markers and choose the correct content');
+            printHint('  3. git add <file> - to mark as resolved');
+            printHint('  4. git commit - to complete the merge');
+            printHint('Or use: git merge --abort - to abort the merge');
+            
+        } else if (error.message.includes('conflict')) {
+            printError(`Merge conflict: ${error.message}`);
+            printHint('Fix conflicts and run "git add <file>" then "git commit"');
+            printHint('Or run "git merge --abort" to cancel the merge');
         } else {
             printError(`Error: ${error.message}`);
         }
