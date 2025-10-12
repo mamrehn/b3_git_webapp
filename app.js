@@ -2568,6 +2568,23 @@ document.getElementById('closeEditor').addEventListener('click', () => {
 });
 
 // Tab completion
+// Helper function to find common prefix among matches
+function getCommonPrefix(matches) {
+    if (matches.length === 0) return '';
+    if (matches.length === 1) return matches[0];
+    
+    let prefix = matches[0];
+    for (let i = 1; i < matches.length; i++) {
+        let j = 0;
+        while (j < prefix.length && j < matches[i].length && prefix[j] === matches[i][j]) {
+            j++;
+        }
+        prefix = prefix.substring(0, j);
+        if (prefix === '') break;
+    }
+    return prefix;
+}
+
 async function handleTabCompletion() {
     const parts = currentLine.split(/\s+/);
     const lastPart = parts[parts.length - 1];
@@ -2583,10 +2600,20 @@ async function handleTabCompletion() {
             cursorPos = currentLine.length;
             term.write(completion + ' ');
         } else if (matches.length > 1) {
-            term.write('\r\n');
-            term.writeln(matches.join('  '));
-            showPromptInline();
-            term.write(currentLine);
+            // Find common prefix and auto-complete it
+            const commonPrefix = getCommonPrefix(matches);
+            if (commonPrefix.length > lastPart.length) {
+                const completion = commonPrefix.substring(lastPart.length);
+                currentLine += completion;
+                cursorPos = currentLine.length;
+                term.write(completion);
+            } else {
+                // No additional common prefix, show all matches
+                term.write('\r\n');
+                term.writeln(matches.join('  '));
+                showPromptInline();
+                term.write(currentLine);
+            }
         }
         return;
     }
@@ -2602,10 +2629,20 @@ async function handleTabCompletion() {
             cursorPos = currentLine.length;
             term.write(completion + ' ');
         } else if (matches.length > 1) {
-            term.write('\r\n');
-            term.writeln(matches.join('  '));
-            showPromptInline();
-            term.write(currentLine);
+            // Find common prefix and auto-complete it
+            const commonPrefix = getCommonPrefix(matches);
+            if (commonPrefix.length > lastPart.length) {
+                const completion = commonPrefix.substring(lastPart.length);
+                currentLine += completion;
+                cursorPos = currentLine.length;
+                term.write(completion);
+            } else {
+                // No additional common prefix, show all matches
+                term.write('\r\n');
+                term.writeln(matches.join('  '));
+                showPromptInline();
+                term.write(currentLine);
+            }
         }
         return;
     }
@@ -2627,10 +2664,22 @@ async function handleTabCompletion() {
             showPromptInline();
             term.write(currentLine);
         } else if (matches.length > 1) {
-            term.write('\r\n');
-            term.writeln(matches.join('  '));
-            showPromptInline();
-            term.write(currentLine);
+            // Find common prefix and auto-complete it
+            const commonPrefix = getCommonPrefix(matches);
+            if (commonPrefix.length > lastPart.length) {
+                const completion = commonPrefix.substring(lastPart.length);
+                currentLine = currentLine.substring(0, currentLine.length - lastPart.length) + commonPrefix;
+                cursorPos = currentLine.length;
+                term.write('\r\x1b[K');
+                showPromptInline();
+                term.write(currentLine);
+            } else {
+                // No additional common prefix, show all matches
+                term.write('\r\n');
+                term.writeln(matches.join('  '));
+                showPromptInline();
+                term.write(currentLine);
+            }
         }
     } catch (error) {
         // Ignore completion errors
