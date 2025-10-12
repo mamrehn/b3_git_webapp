@@ -1814,32 +1814,282 @@ async function gitCheckout(args) {
 async function gitDiff(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        printNormal('git diff output (simplified):');
-        printNormal('');
         
+        // Parse arguments
+        const isStaged = args.includes('--staged') || args.includes('--cached');
+        const specificFile = args.find(arg => !arg.startsWith('--'));
+        
+        // Get status matrix
         const status = await git.statusMatrix({ fs, dir });
         let hasChanges = false;
+        let firstOutput = true;
         
         for (const [filepath, HEADStatus, workdirStatus, stageStatus] of status) {
+            // Skip .git directory
             if (filepath.startsWith('.git/')) continue;
             
-            if (workdirStatus === 2 && stageStatus === 1) {
+            // If specific file requested, skip others
+            if (specificFile && filepath !== specificFile) continue;
+            
+            let showDiff = false;
+            let oldContent = '';
+            let newContent = '';
+            
+            if (isStaged) {
+                // Show diff between HEAD and staging area (--staged/--cached)
+                // stageStatus: 0=absent, 1=unchanged, 2=added, 3=modified
+                if (stageStatus === 2 || stageStatus === 3) {
+                    showDiff = true;
+                    
+                    // Get HEAD content
+                    if (HEADStatus === 1) {
+                        try {
+                            const commitOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+                            const { blob } = await git.readBlob({ fs, dir, oid: commitOid, filepath });
+                            oldContent = new TextDecoder().decode(blob);
+                        } catch (e) {
+                            oldContent = '';
+                        }
+                    }
+                    
+                    // Get staged content
+                    try {
+                        newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8');
+                    } catch (e) {
+                        newContent = '';
+                    }
+                }
+            } else {
+                // Show diff between staging area and working directory (default)
+                // workdirStatus: 0=absent, 1=unchanged, 2=modified
+                if (workdirStatus === 2 && stageStatus !== 2 && stageStatus !== 3) {
+                    showDiff = true;
+                    
+                    // Get staged/HEAD content
+                    if (HEADStatus === 1) {
+                        try {
+                            const commitOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+                            const { blob } = await git.readBlob({ fs, dir, oid: commitOid, filepath });
+                            oldContent = new TextDecoder().decode(blob);
+                        } catch (e) {
+                            oldContent = '';
+                        }
+                    }
+                    
+                    // Get working directory content
+                    try {
+                        newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8');
+                    } catch (e) {
+                        newContent = '';
+                    }
+                }
+            }
+            
+            if (showDiff) {
                 hasChanges = true;
-                term.writeln(`\x1b[33mdiff --git a/${filepath} b/${filepath}\x1b[0m`);
-                term.writeln(`--- a/${filepath}`);
-                term.writeln(`+++ b/${filepath}`);
-                term.writeln(`\x1b[32m(file modified - use "git add ${filepath}" to stage)\x1b[0m`);
-                term.writeln('');
+                
+                // Add blank line before each file's diff (except first)
+                if (!firstOutput) {
+                    term.writeln('');
+                }
+                firstOutput = false;
+                
+                // Print diff header
+                term.writeln(`\x1b[1mdiff --git a/${filepath} b/${filepath}\x1b[0m`);
+                
+                // Check if new file
+                if (HEADStatus === 0) {
+                    term.writeln('\x1b[1mnew file mode 100644\x1b[0m');
+                    term.writeln(`\x1b[1mindex 0000000..${await getShortOid(newContent)}\x1b[0m`);
+                    term.writeln('\x1b[1m--- /dev/null\x1b[0m');
+                    term.writeln(`\x1b[1m+++ b/${filepath}\x1b[0m`);
+                } else {
+                    term.writeln(`\x1b[1mindex ${await getShortOid(oldContent)}..${await getShortOid(newContent)} 100644\x1b[0m`);
+                    term.writeln(`\x1b[1m--- a/${filepath}\x1b[0m`);
+                    term.writeln(`\x1b[1m+++ b/${filepath}\x1b[0m`);
+                }
+                
+                // Use sophisticated diff library with syntax highlighting
+                await printColorizedDiff(oldContent, newContent, filepath);
             }
         }
         
         if (!hasChanges) {
-            printNormal('No changes');
-            printHint('Modify some files to see differences here');
+            if (firstOutput) {
+                printNormal('');
+            }
+            if (isStaged) {
+                printNormal('No changes staged for commit');
+                printHint('Use "git add <file>" to stage changes, then use "git diff --staged" to see them');
+            } else if (specificFile) {
+                printNormal(`No changes in ${specificFile}`);
+            } else {
+                printNormal('No changes');
+                printHint('Modify some files to see differences. Use "git diff --staged" to see staged changes');
+            }
+        } else {
+            term.writeln('');
+            if (!isStaged) {
+                printHint('These are unstaged changes. Use "git add <file>" to stage them');
+            } else {
+                printHint('These changes are staged. Use "git commit" to save them');
+            }
         }
     } catch (error) {
         printError(`git diff failed: ${error.message}`);
     }
+}
+
+// Helper function to generate a simple hash for display
+async function getShortOid(content) {
+    // Simple hash for display purposes (not cryptographic)
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+        const char = content.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(16).padStart(7, '0').substring(0, 7);
+}
+
+// Helper function to get syntax highlighting mode based on file extension
+function getSyntaxMode(filepath) {
+    const ext = filepath.split('.').pop().toLowerCase();
+    const modeMap = {
+        'js': 'javascript',
+        'jsx': 'javascript',
+        'ts': 'javascript',
+        'tsx': 'javascript',
+        'html': 'htmlmixed',
+        'htm': 'htmlmixed',
+        'css': 'css',
+        'scss': 'css',
+        'sass': 'css',
+        'json': 'javascript',
+        'xml': 'xml',
+        'svg': 'xml',
+        'md': 'markdown',
+        'markdown': 'markdown',
+        'py': 'python',
+        'sh': 'shell',
+        'bash': 'shell',
+        'txt': null,
+        'gitignore': null
+    };
+    return modeMap[ext] || null;
+}
+
+// Sophisticated diff printing with syntax highlighting using diff.js library
+async function printColorizedDiff(oldText, newText, filepath) {
+    // Use the diff library (Diff.js by kpdecker)
+    if (!window.Diff) {
+        // Fallback if library not loaded
+        console.error('Diff library not loaded');
+        term.writeln('\x1b[31m(Diff library not available)\x1b[0m');
+        return;
+    }
+    
+    // Create unified diff using the sophisticated library
+    const patch = Diff.createPatch(filepath, oldText, newText, '', '', { context: 3 });
+    const lines = patch.split('\n');
+    
+    // Skip the patch header lines (first 4 lines: ---, +++, index, @@)
+    let inHunk = false;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        // Skip empty lines at the end
+        if (!line && i === lines.length - 1) continue;
+        
+        // Check if this is a hunk header
+        if (line.startsWith('@@')) {
+            inHunk = true;
+            term.writeln(`\x1b[36m${line}\x1b[0m`);
+            continue;
+        }
+        
+        // Skip the diff header lines (we already printed them)
+        if (!inHunk && (line.startsWith('---') || line.startsWith('+++') || 
+            line.startsWith('Index:') || line.startsWith('==='))) {
+            continue;
+        }
+        
+        if (!inHunk) continue;
+        
+        // Color the diff lines with syntax highlighting
+        if (line.startsWith('+')) {
+            // Added line - apply syntax highlighting if possible
+            const content = line.substring(1);
+            const highlighted = applySyntaxHighlight(content, filepath);
+            term.writeln(`\x1b[32m+${highlighted}\x1b[0m`);
+        } else if (line.startsWith('-')) {
+            // Removed line - apply syntax highlighting if possible
+            const content = line.substring(1);
+            const highlighted = applySyntaxHighlight(content, filepath);
+            term.writeln(`\x1b[31m-${highlighted}\x1b[0m`);
+        } else if (line.startsWith(' ')) {
+            // Context line - apply syntax highlighting
+            const content = line.substring(1);
+            const highlighted = applySyntaxHighlight(content, filepath);
+            term.writeln(` ${highlighted}`);
+        } else {
+            // Other lines (shouldn't happen in unified diff)
+            term.writeln(line);
+        }
+    }
+}
+
+// Apply basic syntax highlighting to a line of code
+function applySyntaxHighlight(line, filepath) {
+    const mode = getSyntaxMode(filepath);
+    
+    // If no syntax mode or plain text, return as-is
+    if (!mode) {
+        return escapeAnsi(line);
+    }
+    
+    // Use CodeMirror's simple tokenizer for basic syntax highlighting
+    try {
+        // For HTML/XML/CSS/JS, apply basic highlighting
+        let highlighted = escapeAnsi(line);
+        
+        if (mode === 'javascript' || mode === 'json') {
+            // Highlight strings, keywords, comments
+            highlighted = highlighted
+                .replace(/\/\/.*/g, match => `\x1b[90m${match}\x1b[0m`) // comments
+                .replace(/(['"`])(.*?)\1/g, (match, quote, content) => `\x1b[33m${quote}${content}${quote}\x1b[0m`) // strings
+                .replace(/\b(const|let|var|function|class|if|else|for|while|return|import|export|from|async|await)\b/g, 
+                    match => `\x1b[35m${match}\x1b[0m`); // keywords
+        } else if (mode === 'htmlmixed' || mode === 'xml') {
+            // Highlight tags and attributes
+            highlighted = highlighted
+                .replace(/(&lt;\/?)(\w+)/g, (match, bracket, tag) => `${bracket}\x1b[34m${tag}\x1b[0m`) // tags
+                .replace(/(\w+)=/g, (match, attr) => `\x1b[36m${attr}\x1b[0m=`) // attributes
+                .replace(/(['"])(.*?)\1/g, (match, quote, content) => `\x1b[33m${quote}${content}${quote}\x1b[0m`); // attribute values
+        } else if (mode === 'css') {
+            // Highlight selectors, properties, values
+            highlighted = highlighted
+                .replace(/([.#]?[\w-]+)(?=\s*[{:])/g, match => `\x1b[36m${match}\x1b[0m`) // selectors
+                .replace(/([\w-]+):/g, (match, prop) => `\x1b[35m${prop}\x1b[0m:`) // properties
+                .replace(/:\s*([^;]+);/g, (match, value) => `: \x1b[33m${value}\x1b[0m;`); // values
+        } else if (mode === 'python') {
+            // Highlight Python keywords, strings, comments
+            highlighted = highlighted
+                .replace(/#.*/g, match => `\x1b[90m${match}\x1b[0m`) // comments
+                .replace(/(['"])(.*?)\1/g, (match, quote, content) => `\x1b[33m${quote}${content}${quote}\x1b[0m`) // strings
+                .replace(/\b(def|class|if|elif|else|for|while|return|import|from|as|try|except|finally|with|lambda|yield)\b/g,
+                    match => `\x1b[35m${match}\x1b[0m`); // keywords
+        }
+        
+        return highlighted;
+    } catch (e) {
+        return escapeAnsi(line);
+    }
+}
+
+// Escape any existing ANSI codes in the line
+function escapeAnsi(text) {
+    return text; // For now, just return as-is since we control the content
 }
 
 async function gitReset(args) {
