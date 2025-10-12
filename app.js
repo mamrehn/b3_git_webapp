@@ -50,6 +50,8 @@ let currentProject = 'project1';
 let editorFile = null;
 let editorOriginalContent = '';
 let codeMirrorInstance = null;
+let isCommitMessageMode = false;
+let commitMessageDir = null;
 
 // Reverse search state
 let reverseSearchMode = false;
@@ -1075,8 +1077,8 @@ async function gitCommit(args) {
         }
         
         if (!message) {
-            printError('Aborting commit due to empty commit message.');
-            printHint('Usage: git commit -m "Your commit message"');
+            // No -m flag: Open editor for commit message
+            await openCommitMessageEditor(dir);
             return;
         }
         
@@ -1095,6 +1097,152 @@ async function gitCommit(args) {
             printHint('There are no staged changes. Use "git add <file>" first');
         }
     }
+}
+
+async function openCommitMessageEditor(dir) {
+    // Get the list of staged files
+    const statusMatrix = await git.statusMatrix({ fs, dir });
+    const stagedFiles = statusMatrix.filter(([filepath, head, workdir, stage]) => {
+        // staged=2 means staged for commit
+        return stage === 2;
+    });
+    
+    if (stagedFiles.length === 0) {
+        printError('No changes added to commit');
+        printHint('Use "git add <file>..." to stage files for commit');
+        return;
+    }
+    
+    // Generate commit message template with helpful comments
+    // Start with two empty lines for user to write commit message
+    let template = `
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch ${await git.currentBranch({ fs, dir }).catch(() => 'main')}
+# Changes to be committed:
+`;
+    
+    for (const [filepath] of stagedFiles) {
+        template += `#\t${filepath}\n`;
+    }
+    
+    template += `#
+# You can write a multi-line commit message.
+# First line is the commit summary (max 50 chars recommended).
+# Leave a blank line, then write detailed description if needed.
+`;
+    
+    // Create temporary commit message file
+    const commitMsgPath = `${dir}/.git/COMMIT_EDITMSG`;
+    await pfs.writeFile(commitMsgPath, template, 'utf8');
+    
+    // Open editor using existing editor infrastructure
+    editorFile = commitMsgPath;
+    editorOriginalContent = template;
+    
+    // Set commit message mode flags
+    isCommitMessageMode = true;
+    commitMessageDir = dir;
+    
+    // Use the existing openEditor function
+    openEditor('COMMIT_EDITMSG', template);
+    
+    // Override save behavior for commit message
+    // Store reference to original extraKeys
+    const originalExtraKeys = codeMirrorInstance.getOption('extraKeys');
+    
+    codeMirrorInstance.setOption('extraKeys', {
+        'Ctrl-S': function(cm) {
+            console.log('Ctrl-S pressed in commit editor');
+            saveCommitMessage(dir).then(() => {
+                console.log('saveCommitMessage completed');
+                // Restore original keys after commit
+                codeMirrorInstance.setOption('extraKeys', originalExtraKeys);
+            }).catch(err => {
+                console.error('saveCommitMessage error:', err);
+                // Restore original keys even on error
+                codeMirrorInstance.setOption('extraKeys', originalExtraKeys);
+            });
+        },
+        'Ctrl-X': function(cm) {
+            console.log('Ctrl-X pressed in commit editor');
+            cancelCommit();
+            // Restore original keys after cancel
+            codeMirrorInstance.setOption('extraKeys', originalExtraKeys);
+        }
+    });
+}
+
+async function saveCommitMessage(dir) {
+    console.log('saveCommitMessage called with dir:', dir);
+    const content = codeMirrorInstance.getValue();
+    console.log('Content:', content);
+    
+    // Remove comment lines (lines starting with #)
+    const lines = content.split('\n');
+    const messageLines = lines.filter(line => !line.trim().startsWith('#'));
+    const message = messageLines.join('\n').trim();
+    console.log('Commit message after filtering:', message);
+    
+    if (!message) {
+        closeEditor();
+        printError('Aborting commit due to empty commit message.');
+        return;
+    }
+    
+    try {
+        console.log('Attempting to commit...');
+        // Commit with the message
+        const sha = await git.commit({
+            fs,
+            dir,
+            author: { name: 'Student', email: 'student@example.com' },
+            message
+        });
+        
+        console.log('Commit successful, SHA:', sha);
+        
+        // Get first line for summary
+        const firstLine = message.split('\n')[0];
+        
+        // Clear commit message mode flags
+        isCommitMessageMode = false;
+        commitMessageDir = null;
+        
+        // Close editor first, then print success messages
+        closeEditor();
+        
+        // Use setTimeout to ensure terminal is ready to receive output
+        setTimeout(() => {
+            printNormal(`[main ${sha.substring(0, 7)}] ${firstLine}`);
+            printHint('Commit created! Use "git log" to see your commit history');
+            showPrompt();
+        }, 100);
+        
+    } catch (error) {
+        console.error('Commit failed:', error);
+        
+        // Clear commit message mode flags
+        isCommitMessageMode = false;
+        commitMessageDir = null;
+        
+        closeEditor();
+        setTimeout(() => {
+            printError(`git commit failed: ${error.message}`);
+            showPrompt();
+        }, 100);
+    }
+}
+
+function cancelCommit() {
+    // Clear commit message mode flags
+    isCommitMessageMode = false;
+    commitMessageDir = null;
+    
+    printError('Commit cancelled.');
+    closeEditor();
 }
 
 async function gitLog(args) {
@@ -1139,26 +1287,57 @@ async function gitLog(args) {
             // Ignore if can't get branches
         }
         
+        // Get all branch tips for decoration (used by all formats)
+        const branchTips = new Map();
+        
+        // Add local branches
+        for (const branch of branches) {
+            try {
+                const oid = await git.resolveRef({ fs, dir, ref: branch });
+                if (!branchTips.has(oid)) {
+                    branchTips.set(oid, []);
+                }
+                branchTips.get(oid).push(branch);
+            } catch (e) {
+                // Ignore errors
+            }
+        }
+        
+        // Add remote branches
+        try {
+            const remoteBranches = await git.listBranches({ fs, dir, remote: 'origin' });
+            for (const branch of remoteBranches) {
+                try {
+                    const oid = await git.resolveRef({ fs, dir, ref: `refs/remotes/origin/${branch}` });
+                    if (!branchTips.has(oid)) {
+                        branchTips.set(oid, []);
+                    }
+                    branchTips.get(oid).push(`origin/${branch}`);
+                } catch (e) {
+                    // Ignore errors
+                }
+            }
+            
+            // Add origin/HEAD if it exists
+            try {
+                const headOid = await git.resolveRef({ fs, dir, ref: 'refs/remotes/origin/HEAD' });
+                if (!branchTips.has(headOid)) {
+                    branchTips.set(headOid, []);
+                }
+                branchTips.get(headOid).push('origin/HEAD');
+            } catch (e) {
+                // Ignore if origin/HEAD doesn't exist
+            }
+        } catch (e) {
+            // No remote branches
+        }
+        
         printNormal('');
         
         if (showOneline) {
             // White commit symbols, consistent with full graph view
             const commitSymbolColor = '\x1b[37m';  // White for commit symbols (*)
             const reset = '\x1b[0m';
-            
-            // Get all branch tips for decoration
-            const branchTips = new Map();
-            for (const branch of branches) {
-                try {
-                    const oid = await git.resolveRef({ fs, dir, ref: branch });
-                    if (!branchTips.has(oid)) {
-                        branchTips.set(oid, []);
-                    }
-                    branchTips.get(oid).push(branch);
-                } catch (e) {
-                    // Ignore errors
-                }
-            }
             
             // Compact one-line format
             commits.forEach((commit, index) => {
@@ -1194,8 +1373,48 @@ async function gitLog(args) {
                 }
                 
                 if (showGraph) {
-                    // White star for all commits in oneline mode
-                    term.writeln(`${commitSymbolColor}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                    // Check if this is a merge commit
+                    const parents = commit.commit.parent || [];
+                    const isMerge = parents.length > 1;
+                    
+                    if (isMerge) {
+                        // Merge commit - show with merge indicator
+                        const graphColors = ['\x1b[31m', '\x1b[32m'];  // Red main, Green branch
+                        const color = graphColors[0];
+                        const secondColor = graphColors[1];
+                        
+                        term.writeln(`${commitSymbolColor}*${reset}   \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                        term.writeln(`${color}|\\${reset}`);
+                    } else {
+                        // Check if this is part of a merged branch
+                        const prevCommit = index > 0 ? commits[index - 1] : null;
+                        const isPrevMerge = prevCommit && prevCommit.commit.parent && prevCommit.commit.parent.length > 1;
+                        const isSecondParent = isPrevMerge && prevCommit.commit.parent.length > 1 && 
+                                              prevCommit.commit.parent[1] === commit.oid;
+                        
+                        if (isSecondParent) {
+                            // This is a commit from the merged branch
+                            const graphColors = ['\x1b[31m', '\x1b[32m'];
+                            const color = graphColors[0];
+                            const secondColor = graphColors[1];
+                            
+                            // Check if there's another commit after this one
+                            const nextCommit = index < commits.length - 1 ? commits[index + 1] : null;
+                            const hasMoreAfter = nextCommit && nextCommit.commit.parent && 
+                                                nextCommit.commit.parent.includes(commit.commit.parent[0]);
+                            
+                            if (hasMoreAfter) {
+                                term.writeln(`${color}|${reset} ${commitSymbolColor}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                            } else {
+                                // Last commit before merge point
+                                term.writeln(`${color}|${reset} ${commitSymbolColor}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                                term.writeln(`${color}|/${reset}`);
+                            }
+                        } else {
+                            // Regular commit on main branch
+                            term.writeln(`${commitSymbolColor}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
+                        }
+                    }
                 } else {
                     term.writeln(`\x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
                 }
@@ -1225,51 +1444,6 @@ async function gitLog(args) {
             commits.forEach(commit => {
                 commitMap.set(commit.oid, commit);
             });
-            
-            // Get all branch tips for decoration (local and remote)
-            const branchTips = new Map();
-            
-            // Add local branches
-            for (const branch of branches) {
-                try {
-                    const oid = await git.resolveRef({ fs, dir, ref: branch });
-                    if (!branchTips.has(oid)) {
-                        branchTips.set(oid, []);
-                    }
-                    branchTips.get(oid).push(branch);
-                } catch (e) {
-                    // Ignore errors
-                }
-            }
-            
-            // Add remote branches
-            try {
-                const remoteBranches = await git.listBranches({ fs, dir, remote: 'origin' });
-                for (const branch of remoteBranches) {
-                    try {
-                        const oid = await git.resolveRef({ fs, dir, ref: `refs/remotes/origin/${branch}` });
-                        if (!branchTips.has(oid)) {
-                            branchTips.set(oid, []);
-                        }
-                        branchTips.get(oid).push(`origin/${branch}`);
-                    } catch (e) {
-                        // Ignore errors
-                    }
-                }
-                
-                // Add origin/HEAD if it exists
-                try {
-                    const headOid = await git.resolveRef({ fs, dir, ref: 'refs/remotes/origin/HEAD' });
-                    if (!branchTips.has(headOid)) {
-                        branchTips.set(headOid, []);
-                    }
-                    branchTips.get(headOid).push('origin/HEAD');
-                } catch (e) {
-                    // Ignore if origin/HEAD doesn't exist
-                }
-            } catch (e) {
-                // No remote branches
-            }
             
             commits.forEach((commit, index) => {
                 const isFirst = index === 0;
@@ -2351,6 +2525,10 @@ function openEditor(filename, content) {
 function closeEditor() {
     const editorContainer = document.getElementById('editorContainer');
     
+    // Clear commit message mode flags if still set
+    isCommitMessageMode = false;
+    commitMessageDir = null;
+    
     // Just hide the editor, don't destroy CodeMirror instance
     editorContainer.classList.add('hidden');
     editorFile = null;
@@ -2361,6 +2539,12 @@ function closeEditor() {
 
 async function saveEditor() {
     if (!codeMirrorInstance) return;
+    
+    // Check if we're in commit message mode
+    if (isCommitMessageMode && commitMessageDir) {
+        await saveCommitMessage(commitMessageDir);
+        return;
+    }
     
     const content = codeMirrorInstance.getValue();
     
