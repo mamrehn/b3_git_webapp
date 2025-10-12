@@ -330,13 +330,31 @@ function showPromptInline() {
 
 // Helper functions
 function resolvePath(path) {
+    let resolvedPath;
+    
     if (path.startsWith('/')) {
-        return path;
+        resolvedPath = path;
+    } else if (path.startsWith('~')) {
+        resolvedPath = path.replace('~', '/home/student');
+    } else {
+        resolvedPath = `${currentDir}/${path}`;
     }
-    if (path.startsWith('~')) {
-        return path.replace('~', '/home/student');
+    
+    // Normalize the path: handle . and .. 
+    const parts = resolvedPath.split('/').filter(p => p);
+    const normalized = [];
+    
+    for (const part of parts) {
+        if (part === '..') {
+            if (normalized.length > 0) {
+                normalized.pop();
+            }
+        } else if (part !== '.') {
+            normalized.push(part);
+        }
     }
-    return `${currentDir}/${path}`.replace(/\/+/g, '/');
+    
+    return '/' + normalized.join('/');
 }
 
 async function removeDirectory(dirPath) {
@@ -709,12 +727,20 @@ async function cmdLs(args) {
 async function cmdCd(args) {
     if (args.length === 0) {
         currentDir = '/home/student';
+        await updateFileTree();
         return;
     }
     
     let newDir = args[0];
     
-    // Handle relative paths
+    // Handle current directory
+    if (newDir === '.') {
+        // Stay in current directory, just update the file tree
+        await updateFileTree();
+        return;
+    }
+    
+    // Handle parent directory
     if (newDir === '..') {
         const parts = currentDir.split('/').filter(p => p);
         if (parts.length > 0) {
@@ -722,16 +748,23 @@ async function cmdCd(args) {
             currentDir = '/' + parts.join('/');
             if (currentDir === '/home') currentDir = '/home/student'; // Don't go above home
         }
+        await updateFileTree();
         return;
     }
     
+    // Handle home directory
     if (newDir === '~') {
         currentDir = '/home/student';
+        await updateFileTree();
         return;
     }
     
-    if (!newDir.startsWith('/')) {
-        newDir = `${currentDir}/${newDir}`;
+    // Resolve the path (handles ., .., relative paths)
+    newDir = resolvePath(newDir);
+    
+    // Don't allow going above /home/student
+    if (!newDir.startsWith('/home/student')) {
+        newDir = '/home/student';
     }
     
     try {
@@ -744,6 +777,7 @@ async function cmdCd(args) {
             } else if (currentDir.includes('/project2')) {
                 currentProject = 'project2';
             }
+            await updateFileTree();
         } else {
             printError(`cd: not a directory: ${args[0]}`);
         }
@@ -2662,13 +2696,23 @@ async function handleTabCompletion() {
     // File/directory completion
     try {
         const files = await pfs.readdir(currentDir);
-        const matches = files.filter(file => file.startsWith(lastPart));
+        
+        // Add special directory entries . and ..
+        const allEntries = ['.', '..', ...files];
+        const matches = allEntries.filter(file => file.startsWith(lastPart));
         
         if (matches.length === 1) {
             const completion = matches[0].substring(lastPart.length);
-            const fullPath = `${currentDir}/${matches[0]}`;
-            const stats = await pfs.stat(fullPath);
-            const suffix = stats.isDirectory() ? '/' : ' ';
+            let suffix = ' ';
+            
+            // Determine if it's a directory and add appropriate suffix
+            if (matches[0] === '.' || matches[0] === '..') {
+                suffix = '/';
+            } else {
+                const fullPath = `${currentDir}/${matches[0]}`;
+                const stats = await pfs.stat(fullPath);
+                suffix = stats.isDirectory() ? '/' : ' ';
+            }
             
             currentLine = currentLine.substring(0, currentLine.length - lastPart.length) + matches[0] + suffix;
             cursorPos = currentLine.length;
