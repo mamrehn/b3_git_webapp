@@ -1793,21 +1793,84 @@ async function gitBranch(args) {
 
 async function gitCheckout(args) {
     if (args.length === 0) {
-        printError('Please specify a branch name');
+        printError('Please specify a branch name or commit');
         printHint('Usage: git checkout <branchname>');
+        printHint('       git checkout -b <new-branch>');
+        printHint('       git checkout <commit-hash>');
         return;
     }
     
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        const branchName = args[0];
         
-        await git.checkout({ fs, dir, ref: branchName });
-        printNormal(`Switched to branch '${branchName}'`);
-        printHint('You are now on the "' + branchName + '" branch. Changes you commit will be on this branch.');
+        // Check for -b flag (create new branch)
+        const createBranch = args.includes('-b');
+        
+        if (createBranch) {
+            // git checkout -b <new-branch-name>
+            const bIndex = args.indexOf('-b');
+            if (args.length <= bIndex + 1) {
+                printError('Please specify a branch name after -b');
+                printHint('Usage: git checkout -b <new-branch-name>');
+                return;
+            }
+            
+            const newBranchName = args[bIndex + 1];
+            
+            // Check if branch already exists
+            const branches = await git.listBranches({ fs, dir });
+            if (branches.includes(newBranchName)) {
+                printError(`A branch named '${newBranchName}' already exists.`);
+                printHint('Use "git checkout ' + newBranchName + '" to switch to it');
+                return;
+            }
+            
+            // Create and checkout the new branch
+            await git.branch({ fs, dir, ref: newBranchName, checkout: true });
+            printNormal(`Switched to a new branch '${newBranchName}'`);
+            printHint(`You created and switched to branch "${newBranchName}". Changes you commit will be on this branch.`);
+            
+        } else {
+            // Regular checkout (branch or commit)
+            const ref = args[0];
+            
+            // Check if it's a commit hash (7 or 40 character hex string)
+            const isCommitHash = /^[0-9a-f]{7,40}$/i.test(ref);
+            
+            if (isCommitHash) {
+                // Checkout specific commit (detached HEAD state)
+                try {
+                    // Try to resolve the commit
+                    const fullOid = await git.expandOid({ fs, dir, oid: ref });
+                    
+                    await git.checkout({ fs, dir, ref: fullOid });
+                    printNormal(`Note: switching to '${ref}'.`);
+                    printNormal('');
+                    printNormal('You are in \'detached HEAD\' state. You can look around, make experimental');
+                    printNormal('changes and commit them, and you can discard any commits you make in this');
+                    printNormal('state without impacting any branches by switching back to a branch.');
+                    printNormal('');
+                    printNormal(`HEAD is now at ${ref.substring(0, 7)}`);
+                    printHint('To create a new branch from this commit: git checkout -b <new-branch-name>');
+                } catch (e) {
+                    printError(`fatal: reference is not a tree: ${ref}`);
+                    printHint('Make sure the commit hash is valid. Use "git log" to see commit hashes');
+                }
+            } else {
+                // Checkout branch
+                await git.checkout({ fs, dir, ref });
+                printNormal(`Switched to branch '${ref}'`);
+                printHint(`You are now on the "${ref}" branch. Changes you commit will be on this branch.`);
+            }
+        }
+        
     } catch (error) {
         printError(`git checkout failed: ${error.message}`);
-        printHint('Make sure the branch exists. Use "git branch" to see all branches');
+        
+        if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+            printHint('Make sure the branch exists. Use "git branch" to see all branches');
+            printHint('To create a new branch: git checkout -b <new-branch-name>');
+        }
     }
 }
 
@@ -2233,7 +2296,7 @@ async function gitPush(args) {
         }
     } catch (error) {
         printError(`git push failed: ${error.message}`);
-        printHint('Note: Pushing to remote servers has limitations in browser environments');
+        printHint('This is usually an authentication issue. Push works fully in browsers with proper credentials!');
     }
 }
 
@@ -2370,7 +2433,7 @@ async function gitPull(args) {
         
     } catch (error) {
         printError(`git pull failed: ${error.message}`);
-        printHint('Note: Pulling from remote servers has limitations in browser environments');
+        printHint('This is usually an authentication or network issue. Pull works fully in browsers!');
     }
 }
 
