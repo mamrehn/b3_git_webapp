@@ -34,6 +34,11 @@ window.addEventListener('resize', () => {
     fitAddon.fit();
 });
 
+// Constants
+const GIT_PROXY = 'https://cors.isomorphic-git.org';
+const DEFAULT_REPO_URL = 'https://github.com/mamrehn/project1.git';
+const DEFAULT_USER = { name: 'Student', email: 'student@example.com' };
+
 // Initialize filesystem
 const fs = new LightningFS('gitlearning');
 const pfs = fs.promises;
@@ -68,25 +73,25 @@ async function init() {
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
-        
+
         if (window.GitHttp) {
             console.log('✅ HTTP module loaded successfully');
         } else {
             console.warn('⚠️  HTTP module not loaded, cloning will fallback to sample project');
         }
-        
+
         // Setup directory structure
         await setupFileSystem();
-        
+
         // Print welcome message
         printWelcome();
-        
+
         // Show prompt
         showPrompt();
-        
+
         // Update file tree
         await updateFileTree();
-        
+
     } catch (error) {
         term.writeln(`\r\n\x1b[31mError initializing: ${error.message}\x1b[0m`);
     }
@@ -102,7 +107,7 @@ async function setupFileSystem() {
             return false;
         }
     }
-    
+
     // Helper function to check if file exists
     async function fileExists(path) {
         try {
@@ -112,7 +117,7 @@ async function setupFileSystem() {
             return false;
         }
     }
-    
+
     // Create directory structure only if it doesn't exist
     if (!await dirExists('/home')) {
         await pfs.mkdir('/home', { recursive: true });
@@ -126,13 +131,13 @@ async function setupFileSystem() {
     if (!await dirExists('/home/student/project2')) {
         await pfs.mkdir('/home/student/project2', { recursive: true });
     }
-    
+
     // Setup project1 with initial files and commits (only if not already initialized)
     // Check for .git directory instead of specific files (works for any cloned repo)
     if (!await dirExists('/home/student/project1/.git')) {
         await setupProject1();
     }
-    
+
     // Setup empty project2 (only if not already initialized)
     if (!await dirExists('/home/student/project2/.git')) {
         await setupProject2();
@@ -141,28 +146,28 @@ async function setupFileSystem() {
 
 async function setupProject1() {
     const project1Path = '/home/student/project1';
-    
+
     try {
         // Get HTTP module (might be loaded dynamically)
         const httpModule = window.GitHttp || window.git?.http;
-        
+
         // Check if HTTP module is available
         if (!httpModule) {
             throw new Error('isomorphic-git HTTP module not loaded. Check if the script is included in index.html');
         }
-        
+
         // Clone the real GitHub repository
-        console.log('🔄 Cloning https://github.com/mamrehn/project1.git...');
-        console.log('   Using CORS proxy: https://cors.isomorphic-git.org');
+        console.log(`🔄 Cloning ${DEFAULT_REPO_URL}...`);
+        console.log(`   Using CORS proxy: ${GIT_PROXY}`);
         console.log('   HTTP module available:', !!httpModule);
         console.log('   Git version:', git.version?.());
-        
+
         await git.clone({
             fs,
             http: httpModule,
             dir: project1Path,
-            url: 'https://github.com/mamrehn/project1.git',
-            corsProxy: 'https://cors.isomorphic-git.org',
+            url: DEFAULT_REPO_URL,
+            corsProxy: GIT_PROXY,
             singleBranch: true,
             depth: 100, // Limit history depth for performance
             onProgress: (event) => {
@@ -172,20 +177,20 @@ async function setupProject1() {
                 console.log(`   Git: ${message}`);
             }
         });
-        
+
         // Configure git user for the cloned repo
-        await git.setConfig({ fs, dir: project1Path, path: 'user.name', value: 'Student' });
-        await git.setConfig({ fs, dir: project1Path, path: 'user.email', value: 'student@example.com' });
-        
+        await git.setConfig({ fs, dir: project1Path, path: 'user.name', value: DEFAULT_USER.name });
+        await git.setConfig({ fs, dir: project1Path, path: 'user.email', value: DEFAULT_USER.email });
+
         console.log('✅ Successfully cloned project1 from GitHub!');
         console.log('   Repository has real commit history from GitHub');
-        
+
     } catch (error) {
         console.error('❌ Error cloning repository:', error);
         console.error('   Error name:', error.name);
         console.error('   Error message:', error.message);
         console.error('   Error stack:', error.stack);
-        
+
         // Additional debugging
         if (error.data) {
             console.error('   Error data:', error.data);
@@ -193,18 +198,18 @@ async function setupProject1() {
         if (error.caller) {
             console.error('   Error caller:', error.caller);
         }
-        
+
         // Check if it's a network error
         if (error.message?.includes('fetch') || error.message?.includes('CORS') || error.message?.includes('network')) {
             console.error('   🌐 This appears to be a network/CORS error');
             console.error('   💡 Make sure:');
-            console.error('      1. GitHub repository is public');
-            console.error('      2. CORS proxy is accessible');
+            console.error(`      1. GitHub repository is public (currently trying: ${DEFAULT_REPO_URL})`);
+            console.error(`      2. CORS proxy is accessible (currently using: ${GIT_PROXY})`);
             console.error('      3. Network connection is working');
         }
-        
+
         console.log('⚠️  Falling back to creating sample project...');
-        
+
         // Fallback: Create sample project if cloning fails
         await createFallbackProject1(project1Path);
     }
@@ -213,11 +218,11 @@ async function setupProject1() {
 async function createFallbackProject1(project1Path) {
     // Initialize git repo
     await git.init({ fs, dir: project1Path, defaultBranch: 'main' });
-    
+
     // Configure git
-    await git.setConfig({ fs, dir: project1Path, path: 'user.name', value: 'Student' });
-    await git.setConfig({ fs, dir: project1Path, path: 'user.email', value: 'student@example.com' });
-    
+    await git.setConfig({ fs, dir: project1Path, path: 'user.name', value: DEFAULT_USER.name });
+    await git.setConfig({ fs, dir: project1Path, path: 'user.email', value: DEFAULT_USER.email });
+
     // Create initial HTML file
     const htmlContent = `<!DOCTYPE html>
 <html lang="en">
@@ -232,16 +237,16 @@ async function createFallbackProject1(project1Path) {
     <p>This is my first project.</p>
 </body>
 </html>`;
-    
+
     await pfs.writeFile(`${project1Path}/index.html`, htmlContent, 'utf8');
     await git.add({ fs, dir: project1Path, filepath: 'index.html' });
     await git.commit({
         fs,
         dir: project1Path,
-        author: { name: 'Student', email: 'student@example.com' },
+        author: DEFAULT_USER,
         message: 'Initial commit: Add index.html'
     });
-    
+
     // Create CSS file
     const cssContent = `body {
     font-family: Arial, sans-serif;
@@ -251,16 +256,16 @@ async function createFallbackProject1(project1Path) {
 h1 {
     color: #333;
 }`;
-    
+
     await pfs.writeFile(`${project1Path}/style.css`, cssContent, 'utf8');
     await git.add({ fs, dir: project1Path, filepath: 'style.css' });
     await git.commit({
         fs,
         dir: project1Path,
-        author: { name: 'Student', email: 'student@example.com' },
+        author: DEFAULT_USER,
         message: 'Add basic styling'
     });
-    
+
     // Update CSS
     const cssContent2 = `body {
     font-family: Arial, sans-serif;
@@ -276,28 +281,28 @@ h1 {
 p {
     color: #555;
 }`;
-    
+
     await pfs.writeFile(`${project1Path}/style.css`, cssContent2, 'utf8');
     await git.add({ fs, dir: project1Path, filepath: 'style.css' });
     await git.commit({
         fs,
         dir: project1Path,
-        author: { name: 'Student', email: 'student@example.com' },
+        author: DEFAULT_USER,
         message: 'Update colors and font sizes'
     });
-    
+
     // Create .gitignore
     const gitignoreContent = `*.log
 *.tmp
 node_modules/
 .DS_Store`;
-    
+
     await pfs.writeFile(`${project1Path}/.gitignore`, gitignoreContent, 'utf8');
     await git.add({ fs, dir: project1Path, filepath: '.gitignore' });
     await git.commit({
         fs,
         dir: project1Path,
-        author: { name: 'Student', email: 'student@example.com' },
+        author: DEFAULT_USER,
         message: 'Add .gitignore file'
     });
 }
@@ -331,7 +336,7 @@ function showPromptInline() {
 // Helper functions
 function resolvePath(path) {
     let resolvedPath;
-    
+
     if (path.startsWith('/')) {
         resolvedPath = path;
     } else if (path.startsWith('~')) {
@@ -339,11 +344,11 @@ function resolvePath(path) {
     } else {
         resolvedPath = `${currentDir}/${path}`;
     }
-    
+
     // Normalize the path: handle . and .. 
     const parts = resolvedPath.split('/').filter(p => p);
     const normalized = [];
-    
+
     for (const part of parts) {
         if (part === '..') {
             if (normalized.length > 0) {
@@ -353,24 +358,24 @@ function resolvePath(path) {
             normalized.push(part);
         }
     }
-    
+
     return '/' + normalized.join('/');
 }
 
 async function removeDirectory(dirPath) {
     const items = await fs.promises.readdir(dirPath);
-    
+
     for (const item of items) {
         const itemPath = `${dirPath}/${item}`;
         const stat = await fs.promises.stat(itemPath);
-        
+
         if (stat.isDirectory()) {
             await removeDirectory(itemPath);
         } else {
             await fs.promises.unlink(itemPath);
         }
     }
-    
+
     await fs.promises.rmdir(dirPath);
 }
 
@@ -393,13 +398,13 @@ async function processPipedCommands(fullCommand) {
     try {
         const commands = fullCommand.split('|').map(c => c.trim());
         let output = '';
-        
+
         // Execute first command and capture output
         const firstCmd = commands[0];
         const parts = firstCmd.split(/\s+/);
         const command = parts[0];
         const args = parts.slice(1);
-        
+
         // Capture output from first command
         if (command === 'history') {
             output = commandHistory.map((cmd, i) => `${i + 1}  ${cmd}`).join('\n');
@@ -407,14 +412,14 @@ async function processPipedCommands(fullCommand) {
             printError('Pipe only supported with history command currently');
             return;
         }
-        
+
         // Process remaining commands in pipe
         for (let i = 1; i < commands.length; i++) {
             const pipeCmd = commands[i];
             const pipeParts = pipeCmd.split(/\s+/);
             const pipeCommand = pipeParts[0];
             const pipeArgs = pipeParts.slice(1);
-            
+
             if (pipeCommand === 'grep') {
                 if (pipeArgs.length === 0) {
                     printError('grep: missing search pattern');
@@ -428,7 +433,7 @@ async function processPipedCommands(fullCommand) {
                 return;
             }
         }
-        
+
         // Print final output
         if (output) {
             printNormal('');
@@ -448,11 +453,11 @@ async function processCommand(cmd) {
         showPrompt();
         return;
     }
-    
+
     // Add to history
     commandHistory.push(trimmedCmd);
     historyIndex = commandHistory.length;
-    
+
     // Handle pipes
     if (trimmedCmd.includes('|')) {
         await processPipedCommands(trimmedCmd);
@@ -460,11 +465,11 @@ async function processCommand(cmd) {
         showPrompt();
         return;
     }
-    
+
     const parts = trimmedCmd.split(/\s+/);
     const command = parts[0];
     const args = parts.slice(1);
-    
+
     try {
         switch (command) {
             case 'help':
@@ -522,7 +527,7 @@ async function processCommand(cmd) {
     } catch (error) {
         printError(`Error: ${error.message}`);
     }
-    
+
     await updateFileTree();
     showPrompt();
 }
@@ -530,7 +535,7 @@ async function processCommand(cmd) {
 async function cmdReset() {
     printNormal('\x1b[33mResetting filesystem to initial state...\x1b[0m');
     printNormal('This may take a few seconds while cloning from GitHub...');
-    
+
     try {
         // Recursively delete all files and directories
         async function deleteRecursive(path) {
@@ -550,7 +555,7 @@ async function cmdReset() {
                 console.log(`Skip delete: ${path}`, e.message);
             }
         }
-        
+
         // Delete all content under /home/student
         try {
             const projects = await pfs.readdir('/home/student');
@@ -560,18 +565,18 @@ async function cmdReset() {
         } catch (e) {
             console.log('Error deleting projects:', e);
         }
-        
+
         // Reinitialize filesystem
         await setupFileSystem();
-        
+
         // Reset to home directory
         currentDir = '/home/student';
         currentProject = 'project1';
-        
+
         printNormal('\x1b[32m✓ Filesystem reset complete!\x1b[0m');
         printHint('project1 has been cloned from GitHub with real commit history!');
         printHint('Use "cd project1 && git log" to see the real commits.');
-        
+
         await updateFileTree();
     } catch (error) {
         printError(`Error resetting filesystem: ${error.message}`);
@@ -582,19 +587,19 @@ async function cmdReset() {
 async function cmdDebug() {
     printNormal('\x1b[33m=== Debug Information ===\x1b[0m');
     printNormal('');
-    
+
     // Check HTTP module
     printNormal('\x1b[36mHTTP Module Status:\x1b[0m');
     printNormal(`  window.GitHttp: ${!!window.GitHttp ? '\x1b[32m✓ loaded\x1b[0m' : '\x1b[31m✗ not loaded\x1b[0m'}`);
     printNormal(`  window.git.http: ${!!window.git?.http ? '\x1b[32m✓ available\x1b[0m' : '\x1b[31m✗ not available\x1b[0m'}`);
     printNormal('');
-    
+
     // Check project1 status
     printNormal('\x1b[36mProject1 Status:\x1b[0m');
     try {
         const gitDirExists = await pfs.stat('/home/student/project1/.git').then(() => true).catch(() => false);
         printNormal(`  .git directory: ${gitDirExists ? '\x1b[32m✓ exists\x1b[0m' : '\x1b[31m✗ not found\x1b[0m'}`);
-        
+
         if (gitDirExists) {
             // Try to get the latest commit
             const commits = await git.log({ fs, dir: '/home/student/project1', depth: 1 });
@@ -604,7 +609,7 @@ async function cmdDebug() {
                 printNormal(`    Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
                 printNormal(`    Message: ${commit.commit.message}`);
                 printNormal(`    Date: ${new Date(commit.commit.author.timestamp * 1000).toLocaleString()}`);
-                
+
                 // Check if it's the fallback dummy project
                 if (commit.commit.author.email === 'student@example.com') {
                     printNormal(`  \x1b[31m⚠️  This is the FALLBACK dummy project\x1b[0m`);
@@ -619,7 +624,7 @@ async function cmdDebug() {
         printError(`Error checking project1: ${error.message}`);
     }
     printNormal('');
-    
+
     printHint('Check browser console (F12) for detailed logs');
 }
 
@@ -628,12 +633,12 @@ async function cmdHistory(args) {
         printNormal('(no commands in history)');
         return;
     }
-    
+
     printNormal('');
     commandHistory.forEach((cmd, index) => {
         term.writeln(`${String(index + 1).padStart(5)}  ${cmd}`);
     });
-    
+
     printHint('Use Ctrl+R for reverse history search, or pipe to grep: "history | grep pattern"');
 }
 
@@ -691,7 +696,7 @@ async function cmdLs(args) {
     try {
         const showHidden = args.includes('-a') || args.includes('-la') || args.includes('-al');
         const files = await pfs.readdir(currentDir);
-        
+
         const fileInfos = await Promise.all(files.map(async (file) => {
             const fullPath = `${currentDir}/${file}`;
             const stats = await pfs.stat(fullPath);
@@ -701,15 +706,15 @@ async function cmdLs(args) {
                 isHidden: file.startsWith('.')
             };
         }));
-        
+
         // Filter hidden files if not requested
         const filtered = showHidden ? fileInfos : fileInfos.filter(f => !f.isHidden);
-        
+
         if (filtered.length === 0) {
             printNormal('(empty directory)');
             return;
         }
-        
+
         // Print file list without leading newline
         term.writeln('');
         filtered.forEach(file => {
@@ -718,7 +723,7 @@ async function cmdLs(args) {
             const hiddenColor = file.isHidden ? '\x1b[90m' : '';
             term.writeln(`${hiddenColor}${color}${file.name}${suffix}\x1b[0m`);
         });
-        
+
         // Add spacing before hint
         if (!showHidden && fileInfos.some(f => f.isHidden)) {
             term.writeln('');
@@ -735,16 +740,16 @@ async function cmdCd(args) {
         await updateFileTree();
         return;
     }
-    
+
     let newDir = args[0];
-    
+
     // Handle current directory
     if (newDir === '.') {
         // Stay in current directory, just update the file tree
         await updateFileTree();
         return;
     }
-    
+
     // Handle parent directory
     if (newDir === '..') {
         const parts = currentDir.split('/').filter(p => p);
@@ -756,22 +761,22 @@ async function cmdCd(args) {
         await updateFileTree();
         return;
     }
-    
+
     // Handle home directory
     if (newDir === '~') {
         currentDir = '/home/student';
         await updateFileTree();
         return;
     }
-    
+
     // Resolve the path (handles ., .., relative paths)
     newDir = resolvePath(newDir);
-    
+
     // Don't allow going above /home/student
     if (!newDir.startsWith('/home/student')) {
         newDir = '/home/student';
     }
-    
+
     try {
         const stats = await pfs.stat(newDir);
         if (stats.isDirectory()) {
@@ -801,10 +806,10 @@ async function cmdCat(args) {
         printHint('Usage: cat <filename>');
         return;
     }
-    
+
     const filename = args[0];
     const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
-    
+
     try {
         const content = await pfs.readFile(filepath, 'utf8');
         printNormal('');
@@ -819,10 +824,10 @@ async function cmdMkdir(args) {
         printError('mkdir: missing operand');
         return;
     }
-    
+
     const dirname = args[0];
     const dirpath = dirname.startsWith('/') ? dirname : `${currentDir}/${dirname}`;
-    
+
     try {
         await pfs.mkdir(dirpath, { recursive: true });
         // Directory created silently, like in real terminals
@@ -836,10 +841,10 @@ async function cmdTouch(args) {
         printError('touch: missing file operand');
         return;
     }
-    
+
     const filename = args[0];
     const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
-    
+
     try {
         await pfs.writeFile(filepath, '', 'utf8');
         printNormal(`File created: ${filename}`);
@@ -854,10 +859,10 @@ async function cmdRm(args) {
         printError('rm: missing operand');
         return;
     }
-    
+
     const filename = args[0];
     const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
-    
+
     try {
         await pfs.unlink(filepath);
         printNormal(`File removed: ${filename}`);
@@ -872,12 +877,12 @@ async function cmdEdit(args) {
         printHint('Usage: vi <filename> or nano <filename>');
         return;
     }
-    
+
     const filename = args[0];
     const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
-    
+
     editorFile = filepath;
-    
+
     try {
         // Try to read existing file
         try {
@@ -886,7 +891,7 @@ async function cmdEdit(args) {
             // File doesn't exist, create new
             editorOriginalContent = '';
         }
-        
+
         openEditor(filename, editorOriginalContent);
         printHint('Editor opened. Edit the file and use Ctrl+S to save, Ctrl+X to close.');
     } catch (error) {
@@ -901,10 +906,10 @@ async function cmdGit(args) {
         printHint('Type "help" to see available git commands');
         return;
     }
-    
+
     const subcmd = args[0];
     const subargs = args.slice(1);
-    
+
     // Check if in a git repo for most commands
     const needsRepo = !['init', 'clone', 'help'].includes(subcmd);
     if (needsRepo) {
@@ -916,7 +921,7 @@ async function cmdGit(args) {
             return;
         }
     }
-    
+
     switch (subcmd) {
         case 'init':
             await gitInit(subargs);
@@ -991,7 +996,7 @@ async function gitInit(args) {
         await git.init({ fs, dir: currentDir, defaultBranch: 'main' });
         await git.setConfig({ fs, dir: currentDir, path: 'user.name', value: 'Student' });
         await git.setConfig({ fs, dir: currentDir, path: 'user.email', value: 'student@example.com' });
-        
+
         printNormal(`Initialized empty Git repository in ${currentDir}/.git/`);
         printHint('Great! Now you can add files with "git add <filename>" and commit with "git commit -m <message>"');
     } catch (error) {
@@ -1002,7 +1007,7 @@ async function gitInit(args) {
 async function gitStatus(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         // Check if we're in the middle of a merge
         let mergeInProgress = false;
         try {
@@ -1011,27 +1016,35 @@ async function gitStatus(args) {
         } catch (e) {
             // Not in merge
         }
-        
+
         const status = await git.statusMatrix({ fs, dir });
-        
-        printNormal('On branch main');
-        
+
+        // Get current branch
+        let currentBranch = 'main';
+        try {
+            currentBranch = await git.currentBranch({ fs, dir });
+        } catch (e) {
+            // Fallback to main
+        }
+
+        printNormal(`On branch ${currentBranch}`);
+
         if (mergeInProgress) {
             printError('You have unmerged paths.');
             printNormal('  (fix conflicts and run "git commit")');
             printNormal('  (use "git merge --abort" to abort the merge)');
             printNormal('');
         }
-        
+
         const staged = [];
         const modified = [];
         const untracked = [];
         const conflicted = [];
-        
+
         for (const [filepath, HEADStatus, workdirStatus, stageStatus] of status) {
             // Skip .git directory entries
             if (filepath.startsWith('.git/')) continue;
-            
+
             // Check if file has conflict markers
             if (mergeInProgress && workdirStatus === 2) {
                 try {
@@ -1044,11 +1057,11 @@ async function gitStatus(args) {
                     // Ignore read errors
                 }
             }
-            
+
             // HEADStatus: 0 = absent, 1 = present
             // workdirStatus: 0 = absent, 1 = unchanged, 2 = modified
             // stageStatus: 0 = absent, 1 = unchanged, 2 = added, 3 = modified
-            
+
             if (HEADStatus === 0 && workdirStatus === 2 && stageStatus === 2) {
                 staged.push(filepath);
             } else if (HEADStatus === 1 && workdirStatus === 2 && stageStatus === 2) {
@@ -1059,7 +1072,7 @@ async function gitStatus(args) {
                 untracked.push(filepath);
             }
         }
-        
+
         if (staged.length === 0 && modified.length === 0 && untracked.length === 0 && conflicted.length === 0) {
             if (!mergeInProgress) {
                 printNormal('\nnothing to commit, working tree clean');
@@ -1067,7 +1080,7 @@ async function gitStatus(args) {
             }
             return;
         }
-        
+
         if (conflicted.length > 0) {
             printNormal('\nUnmerged paths:');
             printNormal('  (use "git add <file>..." to mark resolution)');
@@ -1077,7 +1090,7 @@ async function gitStatus(args) {
             });
             printHint('Edit the files to resolve conflicts, then use "git add <file>" to mark as resolved');
         }
-        
+
         if (staged.length > 0) {
             printNormal('\nChanges to be committed:');
             printNormal('  (use "git reset HEAD <file>..." to unstage)');
@@ -1087,7 +1100,7 @@ async function gitStatus(args) {
             });
             printHint('These files are staged and ready to commit with "git commit -m <message>"');
         }
-        
+
         if (modified.length > 0) {
             printNormal('\nChanges not staged for commit:');
             printNormal('  (use "git add <file>..." to update what will be committed)');
@@ -1097,7 +1110,7 @@ async function gitStatus(args) {
             });
             printHint('Use "git add <file>" to stage these changes for commit');
         }
-        
+
         if (untracked.length > 0) {
             printNormal('\nUntracked files:');
             printNormal('  (use "git add <file>..." to include in what will be committed)');
@@ -1107,7 +1120,7 @@ async function gitStatus(args) {
             });
             printHint('These files are not tracked by git. Use "git add <file>" to start tracking them');
         }
-        
+
     } catch (error) {
         printError(`git status failed: ${error.message}`);
     }
@@ -1119,11 +1132,11 @@ async function gitAdd(args) {
         printHint('Usage: git add <filename>');
         return;
     }
-    
+
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
         const file = args[0];
-        
+
         if (file === '.') {
             // Add all files
             const status = await git.statusMatrix({ fs, dir });
@@ -1149,7 +1162,7 @@ async function gitAdd(args) {
 async function gitCommit(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         // Parse commit message
         let message = '';
         const mIndex = args.indexOf('-m');
@@ -1157,20 +1170,20 @@ async function gitCommit(args) {
             // Join all args after -m as the message
             message = args.slice(mIndex + 1).join(' ').replace(/^["']|["']$/g, '');
         }
-        
+
         if (!message) {
             // No -m flag: Open editor for commit message
             await openCommitMessageEditor(dir);
             return;
         }
-        
+
         const sha = await git.commit({
             fs,
             dir,
             author: { name: 'Student', email: 'student@example.com' },
             message
         });
-        
+
         printNormal(`[main ${sha.substring(0, 7)}] ${message}`);
         printHint('Commit created! Use "git log" to see your commit history');
     } catch (error) {
@@ -1188,13 +1201,13 @@ async function openCommitMessageEditor(dir) {
         // staged=2 means staged for commit
         return stage === 2;
     });
-    
+
     if (stagedFiles.length === 0) {
         printError('No changes added to commit');
         printHint('Use "git add <file>..." to stage files for commit');
         return;
     }
-    
+
     // Generate commit message template with helpful comments
     // Start with two empty lines for user to write commit message
     let template = `
@@ -1205,38 +1218,38 @@ async function openCommitMessageEditor(dir) {
 # On branch ${await git.currentBranch({ fs, dir }).catch(() => 'main')}
 # Changes to be committed:
 `;
-    
+
     for (const [filepath] of stagedFiles) {
         template += `#\t${filepath}\n`;
     }
-    
+
     template += `#
 # You can write a multi-line commit message.
 # First line is the commit summary (max 50 chars recommended).
 # Leave a blank line, then write detailed description if needed.
 `;
-    
+
     // Create temporary commit message file
     const commitMsgPath = `${dir}/.git/COMMIT_EDITMSG`;
     await pfs.writeFile(commitMsgPath, template, 'utf8');
-    
+
     // Open editor using existing editor infrastructure
     editorFile = commitMsgPath;
     editorOriginalContent = template;
-    
+
     // Set commit message mode flags
     isCommitMessageMode = true;
     commitMessageDir = dir;
-    
+
     // Use the existing openEditor function
     openEditor('COMMIT_EDITMSG', template);
-    
+
     // Override save behavior for commit message
     // Store reference to original extraKeys
     const originalExtraKeys = codeMirrorInstance.getOption('extraKeys');
-    
+
     codeMirrorInstance.setOption('extraKeys', {
-        'Ctrl-S': function(cm) {
+        'Ctrl-S': function (cm) {
             console.log('Ctrl-S pressed in commit editor');
             saveCommitMessage(dir).then(() => {
                 console.log('saveCommitMessage completed');
@@ -1248,7 +1261,7 @@ async function openCommitMessageEditor(dir) {
                 codeMirrorInstance.setOption('extraKeys', originalExtraKeys);
             });
         },
-        'Ctrl-X': function(cm) {
+        'Ctrl-X': function (cm) {
             console.log('Ctrl-X pressed in commit editor');
             cancelCommit();
             // Restore original keys after cancel
@@ -1261,19 +1274,19 @@ async function saveCommitMessage(dir) {
     console.log('saveCommitMessage called with dir:', dir);
     const content = codeMirrorInstance.getValue();
     console.log('Content:', content);
-    
+
     // Remove comment lines (lines starting with #)
     const lines = content.split('\n');
     const messageLines = lines.filter(line => !line.trim().startsWith('#'));
     const message = messageLines.join('\n').trim();
     console.log('Commit message after filtering:', message);
-    
+
     if (!message) {
         closeEditor();
         printError('Aborting commit due to empty commit message.');
         return;
     }
-    
+
     try {
         console.log('Attempting to commit...');
         // Commit with the message
@@ -1283,33 +1296,33 @@ async function saveCommitMessage(dir) {
             author: { name: 'Student', email: 'student@example.com' },
             message
         });
-        
+
         console.log('Commit successful, SHA:', sha);
-        
+
         // Get first line for summary
         const firstLine = message.split('\n')[0];
-        
+
         // Clear commit message mode flags
         isCommitMessageMode = false;
         commitMessageDir = null;
-        
+
         // Close editor first, then print success messages
         closeEditor();
-        
+
         // Use setTimeout to ensure terminal is ready to receive output
         setTimeout(() => {
             printNormal(`[main ${sha.substring(0, 7)}] ${firstLine}`);
             printHint('Commit created! Use "git log" to see your commit history');
             showPrompt();
         }, 100);
-        
+
     } catch (error) {
         console.error('Commit failed:', error);
-        
+
         // Clear commit message mode flags
         isCommitMessageMode = false;
         commitMessageDir = null;
-        
+
         closeEditor();
         setTimeout(() => {
             printError(`git commit failed: ${error.message}`);
@@ -1322,7 +1335,7 @@ function cancelCommit() {
     // Clear commit message mode flags
     isCommitMessageMode = false;
     commitMessageDir = null;
-    
+
     printError('Commit cancelled.');
     closeEditor();
 }
@@ -1330,29 +1343,29 @@ function cancelCommit() {
 async function gitLog(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         // Parse flags
         const showGraph = args.includes('--graph');
         const showOneline = args.includes('--oneline');
         const showAll = args.includes('--all');
         const showDecorate = args.includes('--decorate') || showOneline;
-        
+
         // Support --all flag for more commits
         const depth = showAll ? 100 : 20;
-        
-        const commits = await git.log({ 
-            fs, 
-            dir, 
+
+        const commits = await git.log({
+            fs,
+            dir,
             depth: depth,
             ref: 'HEAD'
         });
-        
+
         if (commits.length === 0) {
             printNormal('No commits yet');
             printHint('Create your first commit with "git add <file>" and "git commit -m <message>"');
             return;
         }
-        
+
         // Get current branch for decoration
         let currentBranch = '';
         try {
@@ -1360,7 +1373,7 @@ async function gitLog(args) {
         } catch (e) {
             // Ignore if can't get branch
         }
-        
+
         // Get all branches for decoration
         let branches = [];
         try {
@@ -1368,10 +1381,10 @@ async function gitLog(args) {
         } catch (e) {
             // Ignore if can't get branches
         }
-        
+
         // Get all branch tips for decoration (used by all formats)
         const branchTips = new Map();
-        
+
         // Add local branches
         for (const branch of branches) {
             try {
@@ -1384,7 +1397,7 @@ async function gitLog(args) {
                 // Ignore errors
             }
         }
-        
+
         // Add remote branches
         try {
             const remoteBranches = await git.listBranches({ fs, dir, remote: 'origin' });
@@ -1399,7 +1412,7 @@ async function gitLog(args) {
                     // Ignore errors
                 }
             }
-            
+
             // Add origin/HEAD if it exists
             try {
                 const headOid = await git.resolveRef({ fs, dir, ref: 'refs/remotes/origin/HEAD' });
@@ -1413,33 +1426,33 @@ async function gitLog(args) {
         } catch (e) {
             // No remote branches
         }
-        
+
         printNormal('');
-        
+
         if (showOneline) {
             // White commit symbols, consistent with full graph view
             const commitSymbolColor = '\x1b[37m';  // White for commit symbols (*)
             const reset = '\x1b[0m';
-            
+
             // Compact one-line format
             commits.forEach((commit, index) => {
                 const shortHash = commit.oid.substring(0, 7);
                 const firstLine = commit.commit.message.split('\n')[0];
-                
+
                 // Build decoration (standard git colors)
                 let decoration = '';
                 const decorParts = [];
-                
+
                 if (showDecorate && index === 0 && currentBranch) {
                     decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
                 }
-                
+
                 // Add other branches pointing to this commit (remove duplicates)
                 if (branchTips.has(commit.oid)) {
                     let branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !index);
                     // Remove duplicates
                     branchNames = [...new Set(branchNames)];
-                    
+
                     branchNames.forEach(b => {
                         // Remote branches (origin/...) in red, local branches in green
                         if (b.startsWith('origin/')) {
@@ -1449,42 +1462,42 @@ async function gitLog(args) {
                         }
                     });
                 }
-                
+
                 if (decorParts.length > 0) {
                     decoration = ` \x1b[33m(\x1b[0m${decorParts.join('\x1b[33m,\x1b[0m ')}\x1b[33m)\x1b[0m`;
                 }
-                
+
                 if (showGraph) {
                     // Check if this is a merge commit
                     const parents = commit.commit.parent || [];
                     const isMerge = parents.length > 1;
-                    
+
                     if (isMerge) {
                         // Merge commit - show with merge indicator
                         const graphColors = ['\x1b[31m', '\x1b[32m'];  // Red main, Green branch
                         const color = graphColors[0];
                         const secondColor = graphColors[1];
-                        
+
                         term.writeln(`${commitSymbolColor}*${reset}   \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
                         term.writeln(`${color}|\\${reset}`);
                     } else {
                         // Check if this is part of a merged branch
                         const prevCommit = index > 0 ? commits[index - 1] : null;
                         const isPrevMerge = prevCommit && prevCommit.commit.parent && prevCommit.commit.parent.length > 1;
-                        const isSecondParent = isPrevMerge && prevCommit.commit.parent.length > 1 && 
-                                              prevCommit.commit.parent[1] === commit.oid;
-                        
+                        const isSecondParent = isPrevMerge && prevCommit.commit.parent.length > 1 &&
+                            prevCommit.commit.parent[1] === commit.oid;
+
                         if (isSecondParent) {
                             // This is a commit from the merged branch
                             const graphColors = ['\x1b[31m', '\x1b[32m'];
                             const color = graphColors[0];
                             const secondColor = graphColors[1];
-                            
+
                             // Check if there's another commit after this one
                             const nextCommit = index < commits.length - 1 ? commits[index + 1] : null;
-                            const hasMoreAfter = nextCommit && nextCommit.commit.parent && 
-                                                nextCommit.commit.parent.includes(commit.commit.parent[0]);
-                            
+                            const hasMoreAfter = nextCommit && nextCommit.commit.parent &&
+                                nextCommit.commit.parent.includes(commit.commit.parent[0]);
+
                             if (hasMoreAfter) {
                                 term.writeln(`${color}|${reset} ${commitSymbolColor}*${reset} \x1b[33m${shortHash}\x1b[0m${decoration} ${firstLine}`);
                             } else {
@@ -1520,40 +1533,40 @@ async function gitLog(args) {
             ];
             const commitSymbolColor = '\x1b[37m';  // White for commit symbols (*)
             const reset = '\x1b[0m';
-            
+
             // Build commit map for parent lookup
             const commitMap = new Map();
             commits.forEach(commit => {
                 commitMap.set(commit.oid, commit);
             });
-            
+
             commits.forEach((commit, index) => {
                 const isFirst = index === 0;
                 const isLast = index === commits.length - 1;
                 const parents = commit.commit.parent || [];
                 const isMerge = parents.length > 1;
                 const nextCommit = index < commits.length - 1 ? commits[index + 1] : null;
-                
+
                 // Use consistent colors: Red for main branch, Green for merged branch
                 // In complex histories, we would rotate, but for simple linear + merge, keep it consistent
                 const color = graphColors[0];  // Red for main branch
                 const secondColor = graphColors[1];  // Green for merged branch
-                
+
                 // Build decoration (standard git colors)
                 let decoration = '';
                 const decorParts = [];
-                
+
                 if (isFirst && currentBranch) {
                     // HEAD is cyan, arrow is yellow, branch is green
                     decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
                 }
-                
+
                 // Add other branches pointing to this commit (remove duplicates and sort)
                 if (branchTips.has(commit.oid)) {
                     let branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !isFirst);
                     // Remove duplicates
                     branchNames = [...new Set(branchNames)];
-                    
+
                     branchNames.forEach(b => {
                         // Remote branches (origin/...) in red, local branches in green
                         if (b.startsWith('origin/')) {
@@ -1563,37 +1576,37 @@ async function gitLog(args) {
                         }
                     });
                 }
-                
+
                 if (decorParts.length > 0) {
                     decoration = ` \x1b[33m(\x1b[0m${decorParts.join('\x1b[33m,\x1b[0m ')}\x1b[33m)\x1b[0m`;
                 }
-                
+
                 // Check if this is a merge commit
                 if (isMerge) {
                     // Find if the second parent is in our commit list
                     const secondParentInList = parents.length > 1 && commitMap.has(parents[1]);
                     const secondParentIndex = secondParentInList ? commits.findIndex(c => c.oid === parents[1]) : -1;
                     const showBranchCommit = secondParentInList && secondParentIndex === index + 1;
-                    
+
                     // Merge commit header (white star)
                     term.writeln(`${commitSymbolColor}*${reset}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
                     // Merge line with graph branch split (|\ on same line as "Merge:")
                     term.writeln(`${color}|\\${reset}  Merge: ${parents.map(p => p.substring(0, 7)).join(' ')}`);
                     term.writeln(`${color}|${reset} ${secondColor}|${reset} Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
-                    
+
                     // Format date properly
                     const date = new Date(commit.commit.author.timestamp * 1000);
                     const dateStr = date.toString();
                     term.writeln(`${color}|${reset} ${secondColor}|${reset} Date:   ${dateStr}`);
                     term.writeln(`${color}|${reset} ${secondColor}|${reset}`);
-                    
+
                     // Handle multi-line commit messages
                     const messageLines = commit.commit.message.trim().split('\n');
                     messageLines.forEach((line, lineIndex) => {
                         term.writeln(`${color}|${reset} ${secondColor}|${reset}     ${line}`);
                     });
                     term.writeln(`${color}|${reset} ${secondColor}|${reset}`);
-                    
+
                     // If next commit is the second parent (merged branch commit)
                     if (showBranchCommit) {
                         // The next iteration will show this commit with proper prefix
@@ -1603,27 +1616,27 @@ async function gitLog(args) {
                     // Check if this is part of a merged branch
                     const prevCommit = index > 0 ? commits[index - 1] : null;
                     const isPrevMerge = prevCommit && prevCommit.commit.parent && prevCommit.commit.parent.length > 1;
-                    const isSecondParent = isPrevMerge && prevCommit.commit.parent.length > 1 && 
-                                          prevCommit.commit.parent[1] === commit.oid;
-                    
+                    const isSecondParent = isPrevMerge && prevCommit.commit.parent.length > 1 &&
+                        prevCommit.commit.parent[1] === commit.oid;
+
                     if (isSecondParent) {
                         // This is a commit from the merged branch
                         // Check if there's another commit after this one
                         const hasNextCommit = index < commits.length - 1;
                         const nextIsLast = index === commits.length - 2;
-                        
+
                         term.writeln(`${color}|${reset} ${commitSymbolColor}*${reset} \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
                         term.writeln(`${color}|/${reset}  Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
-                        
+
                         // Format date properly
                         const date = new Date(commit.commit.author.timestamp * 1000);
                         const dateStr = date.toString();
-                        
+
                         // After |/ we continue with red line if there's more commits
                         if (hasNextCommit) {
                             term.writeln(`${color}|${reset}   Date:   ${dateStr}`);
                             term.writeln(`${color}|${reset}`);
-                            
+
                             // Handle multi-line commit messages
                             const messageLines = commit.commit.message.trim().split('\n');
                             messageLines.forEach(line => {
@@ -1634,7 +1647,7 @@ async function gitLog(args) {
                             // Last commit - no more lines
                             term.writeln(`   Date:   ${dateStr}`);
                             term.writeln(``);
-                            
+
                             // Handle multi-line commit messages
                             const messageLines = commit.commit.message.trim().split('\n');
                             messageLines.forEach(line => {
@@ -1646,22 +1659,22 @@ async function gitLog(args) {
                         // Regular commit (not part of merge) - main branch
                         const graphPrefix = `${commitSymbolColor}*${reset}`;
                         const linePrefix = isLast ? '  ' : `${color}|${reset}`;
-                        
+
                         term.writeln(`${graphPrefix}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
                         term.writeln(`${linePrefix}   Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
-                        
+
                         // Format date properly
                         const date = new Date(commit.commit.author.timestamp * 1000);
                         const dateStr = date.toString();
                         term.writeln(`${linePrefix}   Date:   ${dateStr}`);
                         term.writeln(`${linePrefix}`);
-                        
+
                         // Handle multi-line commit messages
                         const messageLines = commit.commit.message.trim().split('\n');
                         messageLines.forEach(line => {
                             term.writeln(`${linePrefix}       ${line}`);
                         });
-                        
+
                         term.writeln(isLast ? '' : linePrefix);
                     }
                 }
@@ -1672,17 +1685,17 @@ async function gitLog(args) {
                 // Build decoration (standard git colors)
                 let decoration = '';
                 const decorParts = [];
-                
+
                 if (showDecorate && index === 0 && currentBranch) {
                     decorParts.push(`\x1b[1;36mHEAD\x1b[0m\x1b[33m ->\x1b[0m \x1b[1;32m${currentBranch}\x1b[0m`);
                 }
-                
+
                 // Add other branches pointing to this commit (remove duplicates)
                 if (branchTips.has(commit.oid)) {
                     let branchNames = branchTips.get(commit.oid).filter(b => b !== currentBranch || !index);
                     // Remove duplicates
                     branchNames = [...new Set(branchNames)];
-                    
+
                     branchNames.forEach(b => {
                         // Remote branches (origin/...) in red, local branches in green
                         if (b.startsWith('origin/')) {
@@ -1692,20 +1705,20 @@ async function gitLog(args) {
                         }
                     });
                 }
-                
+
                 if (decorParts.length > 0) {
                     decoration = ` \x1b[33m(\x1b[0m${decorParts.join('\x1b[33m,\x1b[0m ')}\x1b[33m)\x1b[0m`;
                 }
-                
+
                 term.writeln(`\x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
                 term.writeln(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
-                
+
                 // Format date properly
                 const date = new Date(commit.commit.author.timestamp * 1000);
                 const dateStr = date.toString();
                 term.writeln(`Date:   ${dateStr}`);
                 term.writeln(``);
-                
+
                 // Handle multi-line commit messages
                 const messageLines = commit.commit.message.trim().split('\n');
                 messageLines.forEach(line => {
@@ -1714,7 +1727,7 @@ async function gitLog(args) {
                 term.writeln(``);
             });
         }
-        
+
         if (commits.length >= depth) {
             printHint(`Showing last ${depth} commits. Use "git log --all" to see more`);
         } else {
@@ -1729,17 +1742,17 @@ async function gitLog(args) {
 async function gitBranch(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         // Check for flags
         const showRemote = args.includes('-r') || args.includes('--remotes');
         const showAll = args.includes('-a') || args.includes('--all');
-        
+
         if (args.length === 0 || showRemote || showAll) {
             // List branches
             const current = await git.currentBranch({ fs, dir });
-            
+
             printNormal('');
-            
+
             // Show local branches
             if (!showRemote) {
                 const localBranches = await git.listBranches({ fs, dir });
@@ -1749,7 +1762,7 @@ async function gitBranch(args) {
                     term.writeln(`${marker}${color}${branch}\x1b[0m`);
                 });
             }
-            
+
             // Show remote branches
             if (showRemote || showAll) {
                 try {
@@ -1768,7 +1781,7 @@ async function gitBranch(args) {
                     }
                 }
             }
-            
+
             if (!showRemote && !showAll) {
                 printHint('Use "git branch -r" to see remote branches');
                 printHint('Use "git branch -a" to see all branches');
@@ -1781,7 +1794,7 @@ async function gitBranch(args) {
                 printError('Please specify a branch name');
                 return;
             }
-            
+
             await git.branch({ fs, dir, ref: branchName });
             printNormal(`Branch '${branchName}' created`);
             printHint(`Switch to the new branch with "git checkout ${branchName}"`);
@@ -1799,13 +1812,13 @@ async function gitCheckout(args) {
         printHint('       git checkout <commit-hash>');
         return;
     }
-    
+
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         // Check for -b flag (create new branch)
         const createBranch = args.includes('-b');
-        
+
         if (createBranch) {
             // git checkout -b <new-branch-name>
             const bIndex = args.indexOf('-b');
@@ -1814,9 +1827,9 @@ async function gitCheckout(args) {
                 printHint('Usage: git checkout -b <new-branch-name>');
                 return;
             }
-            
+
             const newBranchName = args[bIndex + 1];
-            
+
             // Check if branch already exists
             const branches = await git.listBranches({ fs, dir });
             if (branches.includes(newBranchName)) {
@@ -1824,25 +1837,25 @@ async function gitCheckout(args) {
                 printHint('Use "git checkout ' + newBranchName + '" to switch to it');
                 return;
             }
-            
+
             // Create and checkout the new branch
             await git.branch({ fs, dir, ref: newBranchName, checkout: true });
             printNormal(`Switched to a new branch '${newBranchName}'`);
             printHint(`You created and switched to branch "${newBranchName}". Changes you commit will be on this branch.`);
-            
+
         } else {
             // Regular checkout (branch or commit)
             const ref = args[0];
-            
+
             // Check if it's a commit hash (7 or 40 character hex string)
             const isCommitHash = /^[0-9a-f]{7,40}$/i.test(ref);
-            
+
             if (isCommitHash) {
                 // Checkout specific commit (detached HEAD state)
                 try {
                     // Try to resolve the commit
                     const fullOid = await git.expandOid({ fs, dir, oid: ref });
-                    
+
                     await git.checkout({ fs, dir, ref: fullOid });
                     printNormal(`Note: switching to '${ref}'.`);
                     printNormal('');
@@ -1863,10 +1876,10 @@ async function gitCheckout(args) {
                 printHint(`You are now on the "${ref}" branch. Changes you commit will be on this branch.`);
             }
         }
-        
+
     } catch (error) {
         printError(`git checkout failed: ${error.message}`);
-        
+
         if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
             printHint('Make sure the branch exists. Use "git branch" to see all branches');
             printHint('To create a new branch: git checkout -b <new-branch-name>');
@@ -1877,33 +1890,33 @@ async function gitCheckout(args) {
 async function gitDiff(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         // Parse arguments
         const isStaged = args.includes('--staged') || args.includes('--cached');
         const specificFile = args.find(arg => !arg.startsWith('--'));
-        
+
         // Get status matrix
         const status = await git.statusMatrix({ fs, dir });
         let hasChanges = false;
         let firstOutput = true;
-        
+
         for (const [filepath, HEADStatus, workdirStatus, stageStatus] of status) {
             // Skip .git directory
             if (filepath.startsWith('.git/')) continue;
-            
+
             // If specific file requested, skip others
             if (specificFile && filepath !== specificFile) continue;
-            
+
             let showDiff = false;
             let oldContent = '';
             let newContent = '';
-            
+
             if (isStaged) {
                 // Show diff between HEAD and staging area (--staged/--cached)
                 // stageStatus: 0=absent, 1=unchanged, 2=added, 3=modified
                 if (stageStatus === 2 || stageStatus === 3) {
                     showDiff = true;
-                    
+
                     // Get HEAD content
                     if (HEADStatus === 1) {
                         try {
@@ -1914,7 +1927,7 @@ async function gitDiff(args) {
                             oldContent = '';
                         }
                     }
-                    
+
                     // Get staged content
                     try {
                         newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8');
@@ -1927,7 +1940,7 @@ async function gitDiff(args) {
                 // workdirStatus: 0=absent, 1=unchanged, 2=modified
                 if (workdirStatus === 2 && stageStatus !== 2 && stageStatus !== 3) {
                     showDiff = true;
-                    
+
                     // Get staged/HEAD content
                     if (HEADStatus === 1) {
                         try {
@@ -1938,7 +1951,7 @@ async function gitDiff(args) {
                             oldContent = '';
                         }
                     }
-                    
+
                     // Get working directory content
                     try {
                         newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8');
@@ -1947,19 +1960,19 @@ async function gitDiff(args) {
                     }
                 }
             }
-            
+
             if (showDiff) {
                 hasChanges = true;
-                
+
                 // Add blank line before each file's diff (except first)
                 if (!firstOutput) {
                     term.writeln('');
                 }
                 firstOutput = false;
-                
+
                 // Print diff header
                 term.writeln(`\x1b[1mdiff --git a/${filepath} b/${filepath}\x1b[0m`);
-                
+
                 // Check if new file
                 if (HEADStatus === 0) {
                     term.writeln('\x1b[1mnew file mode 100644\x1b[0m');
@@ -1971,12 +1984,12 @@ async function gitDiff(args) {
                     term.writeln(`\x1b[1m--- a/${filepath}\x1b[0m`);
                     term.writeln(`\x1b[1m+++ b/${filepath}\x1b[0m`);
                 }
-                
+
                 // Use sophisticated diff library with syntax highlighting
                 await printColorizedDiff(oldContent, newContent, filepath);
             }
         }
-        
+
         if (!hasChanges) {
             if (firstOutput) {
                 printNormal('');
@@ -2051,34 +2064,34 @@ async function printColorizedDiff(oldText, newText, filepath) {
         term.writeln('\x1b[31m(Diff library not available)\x1b[0m');
         return;
     }
-    
+
     // Create unified diff using the sophisticated library
     const patch = Diff.createPatch(filepath, oldText, newText, '', '', { context: 3 });
     const lines = patch.split('\n');
-    
+
     // Skip the patch header lines (first 4 lines: ---, +++, index, @@)
     let inHunk = false;
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        
+
         // Skip empty lines at the end
         if (!line && i === lines.length - 1) continue;
-        
+
         // Check if this is a hunk header
         if (line.startsWith('@@')) {
             inHunk = true;
             term.writeln(`\x1b[36m${line}\x1b[0m`);
             continue;
         }
-        
+
         // Skip the diff header lines (we already printed them)
-        if (!inHunk && (line.startsWith('---') || line.startsWith('+++') || 
+        if (!inHunk && (line.startsWith('---') || line.startsWith('+++') ||
             line.startsWith('Index:') || line.startsWith('==='))) {
             continue;
         }
-        
+
         if (!inHunk) continue;
-        
+
         // Color the diff lines with syntax highlighting
         if (line.startsWith('+')) {
             // Added line - apply syntax highlighting if possible
@@ -2105,23 +2118,23 @@ async function printColorizedDiff(oldText, newText, filepath) {
 // Apply basic syntax highlighting to a line of code
 function applySyntaxHighlight(line, filepath) {
     const mode = getSyntaxMode(filepath);
-    
+
     // If no syntax mode or plain text, return as-is
     if (!mode) {
         return escapeAnsi(line);
     }
-    
+
     // Use CodeMirror's simple tokenizer for basic syntax highlighting
     try {
         // For HTML/XML/CSS/JS, apply basic highlighting
         let highlighted = escapeAnsi(line);
-        
+
         if (mode === 'javascript' || mode === 'json') {
             // Highlight strings, keywords, comments
             highlighted = highlighted
                 .replace(/\/\/.*/g, match => `\x1b[90m${match}\x1b[0m`) // comments
                 .replace(/(['"`])(.*?)\1/g, (match, quote, content) => `\x1b[33m${quote}${content}${quote}\x1b[0m`) // strings
-                .replace(/\b(const|let|var|function|class|if|else|for|while|return|import|export|from|async|await)\b/g, 
+                .replace(/\b(const|let|var|function|class|if|else|for|while|return|import|export|from|async|await)\b/g,
                     match => `\x1b[35m${match}\x1b[0m`); // keywords
         } else if (mode === 'htmlmixed' || mode === 'xml') {
             // Highlight tags and attributes
@@ -2143,7 +2156,7 @@ function applySyntaxHighlight(line, filepath) {
                 .replace(/\b(def|class|if|elif|else|for|while|return|import|from|as|try|except|finally|with|lambda|yield)\b/g,
                     match => `\x1b[35m${match}\x1b[0m`); // keywords
         }
-        
+
         return highlighted;
     } catch (e) {
         return escapeAnsi(line);
@@ -2161,11 +2174,11 @@ async function gitReset(args) {
         printHint('Usage: git reset <filename>');
         return;
     }
-    
+
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
         const file = args[0];
-        
+
         await git.resetIndex({ fs, dir, filepath: file });
         printNormal(`Unstaged changes for ${file}`);
         printHint('The file is now unstaged. Use "git add" to stage it again');
@@ -2177,11 +2190,11 @@ async function gitReset(args) {
 async function gitRemote(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         if (args.length === 0 || args[0] === '-v') {
             // List remotes
             const remotes = await git.listRemotes({ fs, dir });
-            
+
             if (remotes.length === 0) {
                 printNormal('No remotes configured');
                 printHint('Add a remote with: git remote add origin <url>');
@@ -2198,10 +2211,10 @@ async function gitRemote(args) {
                 printError('Usage: git remote add <name> <url>');
                 return;
             }
-            
+
             const remoteName = args[1];
             const remoteUrl = args[2];
-            
+
             await git.addRemote({ fs, dir, remote: remoteName, url: remoteUrl });
             printNormal(`Remote '${remoteName}' added: ${remoteUrl}`);
             printHint('This is a simulated remote. You can practice push/pull commands!');
@@ -2215,13 +2228,13 @@ async function gitPush(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
         const remotes = await git.listRemotes({ fs, dir });
-        
+
         if (remotes.length === 0) {
             printError('No remote configured');
             printHint('Add a remote first with: git remote add origin <url>');
             return;
         }
-        
+
         // Get HTTP module
         const httpModule = window.GitHttp || window.git?.http;
         if (!httpModule) {
@@ -2229,17 +2242,17 @@ async function gitPush(args) {
             printHint('Push functionality requires the isomorphic-git HTTP module');
             return;
         }
-        
+
         // Parse arguments
         const remote = args.find(arg => !arg.startsWith('-')) || 'origin';
         const force = args.includes('-f') || args.includes('--force');
-        
+
         // Get current branch
         const currentBranch = await git.currentBranch({ fs, dir }) || 'main';
         const ref = args.find(arg => arg.includes(':')) || `refs/heads/${currentBranch}:refs/heads/${currentBranch}`;
-        
+
         printNormal(`Pushing to ${remotes[0].url}...`);
-        
+
         try {
             // Attempt to push (this will fail without authentication for private repos)
             const result = await git.push({
@@ -2249,7 +2262,7 @@ async function gitPush(args) {
                 remote,
                 ref,
                 force,
-                corsProxy: 'https://cors.isomorphic-git.org',
+                corsProxy: GIT_PROXY,
                 onAuth: () => {
                     // For learning purposes, we'll use a callback that explains auth
                     printNormal('');
@@ -2270,12 +2283,12 @@ async function gitPush(args) {
                     }
                 }
             });
-            
+
             printNormal('');
             printNormal(`To ${remotes[0].url}`);
             printNormal(`   ${result.ok ? '✓' : '✗'} ${currentBranch} -> ${currentBranch}`);
             printHint('Push successful! Your commits are now on the remote server');
-            
+
         } catch (error) {
             // Handle specific error cases
             if (error.message?.includes('401') || error.message?.includes('403')) {
@@ -2304,13 +2317,13 @@ async function gitPull(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
         const remotes = await git.listRemotes({ fs, dir });
-        
+
         if (remotes.length === 0) {
             printError('No remote configured');
             printHint('Add a remote first with: git remote add origin <url>');
             return;
         }
-        
+
         // Get HTTP module
         const httpModule = window.GitHttp || window.git?.http;
         if (!httpModule) {
@@ -2318,13 +2331,13 @@ async function gitPull(args) {
             printHint('Pull functionality requires the isomorphic-git HTTP module');
             return;
         }
-        
+
         // Parse arguments
         const remote = args.find(arg => !arg.startsWith('-')) || 'origin';
         const currentBranch = await git.currentBranch({ fs, dir }) || 'main';
-        
+
         printNormal(`Fetching from ${remotes[0].url}...`);
-        
+
         try {
             // First, fetch from remote
             await git.fetch({
@@ -2333,7 +2346,7 @@ async function gitPull(args) {
                 dir,
                 remote,
                 ref: currentBranch,
-                corsProxy: 'https://cors.isomorphic-git.org',
+                corsProxy: GIT_PROXY,
                 singleBranch: true,
                 tags: false,
                 onProgress: (event) => {
@@ -2351,41 +2364,41 @@ async function gitPull(args) {
                     }
                 }
             });
-            
+
             printNormal('From ' + remotes[0].url);
             printNormal(` * branch            ${currentBranch}       -> FETCH_HEAD`);
-            
+
             // Get the remote branch OID
             let remoteBranchOid;
             try {
-                remoteBranchOid = await git.resolveRef({ 
-                    fs, 
-                    dir, 
-                    ref: `refs/remotes/${remote}/${currentBranch}` 
+                remoteBranchOid = await git.resolveRef({
+                    fs,
+                    dir,
+                    ref: `refs/remotes/${remote}/${currentBranch}`
                 });
             } catch (e) {
                 printError('Could not find remote branch');
                 printHint(`Make sure the branch "${currentBranch}" exists on the remote`);
                 return;
             }
-            
+
             // Get the current branch OID
             const currentOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
-            
+
             // Check if already up to date
             if (currentOid === remoteBranchOid) {
                 printNormal('Already up to date.');
                 return;
             }
-            
+
             // Check if it's a fast-forward merge
-            const canFastForward = await git.isDescendent({ 
-                fs, 
-                dir, 
-                oid: remoteBranchOid, 
-                ancestor: currentOid 
+            const canFastForward = await git.isDescendent({
+                fs,
+                dir,
+                oid: remoteBranchOid,
+                ancestor: currentOid
             });
-            
+
             if (canFastForward) {
                 // Fast-forward merge
                 await git.fastForward({
@@ -2395,30 +2408,30 @@ async function gitPull(args) {
                     remote,
                     singleBranch: true
                 });
-                
+
                 printNormal('Updating ' + currentOid.substring(0, 7) + '..' + remoteBranchOid.substring(0, 7));
                 printNormal('Fast-forward');
-                
+
                 // Show changed files
-                const commits = await git.log({ 
-                    fs, 
-                    dir, 
+                const commits = await git.log({
+                    fs,
+                    dir,
                     ref: currentBranch,
                     since: new Date(Date.now() - 1000 * 60 * 60 * 24) // Last 24 hours
                 });
-                
+
                 if (commits.length > 0) {
                     const latestCommit = commits[0];
                     printNormal(` ${latestCommit.commit.message.split('\n')[0]}`);
                 }
-                
+
                 printHint('Successfully pulled changes! Your local branch is now up to date');
             } else {
                 printError('Cannot fast-forward. You have diverged from the remote branch.');
                 printHint('You need to merge the changes. Try: git merge origin/' + currentBranch);
                 printHint('Or, if you want to discard local changes: git reset --hard origin/' + currentBranch);
             }
-            
+
         } catch (error) {
             if (error.message?.includes('401') || error.message?.includes('403')) {
                 printError('Authentication failed or access denied');
@@ -2430,7 +2443,7 @@ async function gitPull(args) {
                 throw error;
             }
         }
-        
+
     } catch (error) {
         printError(`git pull failed: ${error.message}`);
         printHint('This is usually an authentication or network issue. Pull works fully in browsers!');
@@ -2444,7 +2457,7 @@ async function gitClone(args) {
         printHint('Example: git clone https://github.com/numpy/numpy.git');
         return;
     }
-    
+
     // Get HTTP module (required for cloning)
     const httpModule = window.GitHttp || window.git?.http;
     if (!httpModule) {
@@ -2452,25 +2465,25 @@ async function gitClone(args) {
         printHint('Make sure the page loaded correctly. Try refreshing.');
         return;
     }
-    
+
     const url = args[0];
     const customDir = args[1]; // Optional custom directory name
-    
+
     // Extract repository name from URL
     let repoName = url.split('/').pop().replace('.git', '');
     if (customDir) {
         repoName = customDir;
     }
-    
+
     // Validate URL
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
         printError('Only HTTP(S) URLs are supported');
         printHint('Example: git clone https://github.com/user/repo.git');
         return;
     }
-    
+
     const targetPath = resolvePath(repoName);
-    
+
     // Check if directory already exists
     try {
         await pfs.stat(targetPath);
@@ -2479,13 +2492,13 @@ async function gitClone(args) {
     } catch (e) {
         // Directory doesn't exist, which is what we want
     }
-    
+
     printNormal(`Cloning into '${repoName}'...`);
-    
+
     try {
         // Create directory
         await pfs.mkdir(targetPath, { recursive: true });
-        
+
         // Clone the repository (fetch all branches by default)
         let lastPhase = '';
         await git.clone({
@@ -2493,7 +2506,7 @@ async function gitClone(args) {
             http: httpModule,
             dir: targetPath,
             url: url,
-            corsProxy: 'https://cors.isomorphic-git.org',
+            corsProxy: GIT_PROXY,
             singleBranch: false, // Fetch all branches
             depth: 10, // Shallow clone for performance (only last 10 commits)
             onProgress: (event) => {
@@ -2517,26 +2530,26 @@ async function gitClone(args) {
                 return { username: '', password: '' };
             }
         });
-        
+
         // Configure git user in the cloned repo
-        await git.setConfig({ fs, dir: targetPath, path: 'user.name', value: 'Student' });
-        await git.setConfig({ fs, dir: targetPath, path: 'user.email', value: 'student@example.com' });
-        
+        await git.setConfig({ fs, dir: targetPath, path: 'user.name', value: DEFAULT_USER.name });
+        await git.setConfig({ fs, dir: targetPath, path: 'user.email', value: DEFAULT_USER.email });
+
         printNormal(`\x1b[32m✓ Successfully cloned repository!\x1b[0m`);
         term.writeln(''); // Blank line before hints
         printHint(`cd ${repoName} && git log --graph --oneline to explore the history`);
         printHint('Large repositories may take some time. Using shallow clone for performance.');
-        
+
     } catch (error) {
         printError(`Failed to clone repository: ${error.message}`);
-        
+
         // Clean up partial clone
         try {
             await removeDirectory(targetPath);
         } catch (cleanupError) {
             // Ignore cleanup errors
         }
-        
+
         // Provide helpful error messages
         if (error.message.includes('404') || error.message.includes('not found')) {
             printHint('Repository not found. Check the URL and make sure the repository is public.');
@@ -2550,7 +2563,7 @@ async function gitClone(args) {
         } else {
             printHint('Make sure the repository URL is correct and the repository is public.');
         }
-        
+
         console.error('Clone error details:', error);
     }
 }
@@ -2562,38 +2575,38 @@ async function gitRm(args) {
         printHint('Use -r to remove directories recursively');
         return;
     }
-    
+
     const dir = await git.findRoot({ fs, filepath: currentDir });
     const recursive = args.includes('-r') || args.includes('--recursive');
     const cached = args.includes('--cached');
     const force = args.includes('-f') || args.includes('--force');
-    
+
     // Filter out flags
     const files = args.filter(arg => !arg.startsWith('-'));
-    
+
     if (files.length === 0) {
         printError('fatal: No pathspec was given. Which files should I remove?');
         return;
     }
-    
+
     try {
         for (const file of files) {
             const filepath = resolvePath(file);
             const relPath = filepath.replace(dir + '/', '');
-            
+
             // Check if file exists
             try {
                 const stat = await fs.promises.stat(filepath);
-                
+
                 if (stat.isDirectory() && !recursive) {
                     printError(`fatal: not removing '${file}' recursively without -r`);
                     continue;
                 }
-                
+
                 // Remove from git index
                 await git.remove({ fs, dir, filepath: relPath });
                 printNormal(`rm '${file}'`);
-                
+
                 // Remove from filesystem (unless --cached)
                 if (!cached) {
                     if (stat.isDirectory()) {
@@ -2606,7 +2619,7 @@ async function gitRm(args) {
                 printError(`fatal: pathspec '${file}' did not match any files`);
             }
         }
-        
+
         if (!cached) {
             printHint('Files removed from working directory and staging area');
         } else {
@@ -2623,35 +2636,35 @@ async function gitMv(args) {
         printHint('Usage: git mv <source> <destination>');
         return;
     }
-    
+
     const dir = await git.findRoot({ fs, filepath: currentDir });
     const source = args[0];
     const dest = args[1];
-    
+
     const sourcePath = resolvePath(source);
     const destPath = resolvePath(dest);
     const relSource = sourcePath.replace(dir + '/', '');
     const relDest = destPath.replace(dir + '/', '');
-    
+
     try {
         // Check if source exists
         const stat = await fs.promises.stat(sourcePath);
-        
+
         // Read source content
         const content = await fs.promises.readFile(sourcePath, 'utf8');
-        
+
         // Write to destination
         await fs.promises.writeFile(destPath, content);
-        
+
         // Remove from git index (old path)
         await git.remove({ fs, dir, filepath: relSource });
-        
+
         // Add to git index (new path)
         await git.add({ fs, dir, filepath: relDest });
-        
+
         // Remove old file
         await fs.promises.unlink(sourcePath);
-        
+
         printNormal(`Renamed ${source} -> ${dest}`);
         printHint('File has been moved/renamed and staged for commit');
     } catch (error) {
@@ -2666,19 +2679,19 @@ async function gitMerge(args) {
         printHint('Usage: git merge <branch>');
         return;
     }
-    
+
     const dir = await git.findRoot({ fs, filepath: currentDir });
     const branchToMerge = args[0];
-    
+
     try {
         const branches = await git.listBranches({ fs, dir });
         if (!branches.includes(branchToMerge)) {
             printError(`error: pathspec '${branchToMerge}' did not match any file(s) known to git`);
             return;
         }
-        
+
         const currentBranch = await git.currentBranch({ fs, dir });
-        
+
         // Check for --abort flag
         if (args.includes('--abort')) {
             try {
@@ -2693,35 +2706,35 @@ async function gitMerge(args) {
                 return;
             }
         }
-        
-        const result = await git.merge({ 
-            fs, 
-            dir, 
-            ours: currentBranch, 
-            theirs: branchToMerge, 
+
+        const result = await git.merge({
+            fs,
+            dir,
+            ours: currentBranch,
+            theirs: branchToMerge,
             author: { name: 'Student', email: 'student@example.com' },
             dryRun: false,
             noUpdateBranch: false
         });
-        
+
         // Check if merge was successful
         if (result && result.alreadyMerged) {
             printNormal('Already up to date.');
             return;
         }
-        
+
         printNormal(`Merge made by the 'recursive' strategy.`);
         printNormal(`Merged branch '${branchToMerge}' into ${currentBranch}`);
         printHint('Files from the merged branch are now in your working directory');
-        
+
     } catch (error) {
         console.error('Merge error:', error);
-        
+
         if (error.code === 'MergeNotSupportedError' || error.data) {
             // Handle merge conflicts
             printError('CONFLICT (content): Merge conflict detected');
             printNormal('Automatic merge failed; fix conflicts and then commit the result.');
-            
+
             // Show conflicted files if available
             if (error.data && error.data.filepaths) {
                 printNormal('');
@@ -2730,7 +2743,7 @@ async function gitMerge(args) {
                     printError(`  ${filepath}`);
                 });
             }
-            
+
             term.writeln(''); // Blank line before hints
             printHint('To resolve conflicts:');
             printHint('  1. Edit the conflicted files (look for <<<<<<< markers)');
@@ -2738,7 +2751,7 @@ async function gitMerge(args) {
             printHint('  3. git add <file> - to mark as resolved');
             printHint('  4. git commit - to complete the merge');
             printHint('Or use: git merge --abort - to abort the merge');
-            
+
         } else if (error.message.includes('conflict')) {
             printError(`Merge conflict: ${error.message}`);
             printHint('Fix conflicts and run "git add <file>" then "git commit"');
@@ -2751,7 +2764,7 @@ async function gitMerge(args) {
 
 async function gitTag(args) {
     const dir = await git.findRoot({ fs, filepath: currentDir });
-    
+
     if (args.length === 0) {
         // List tags
         try {
@@ -2766,16 +2779,16 @@ async function gitTag(args) {
         }
         return;
     }
-    
+
     const tagName = args[0];
     const hasMessage = args.includes('-m') || args.includes('-a');
     let message = '';
-    
+
     if (hasMessage) {
         const msgIndex = args.indexOf('-m') !== -1 ? args.indexOf('-m') : args.indexOf('-a');
         message = args[msgIndex + 1] || '';
     }
-    
+
     // Delete tag
     if (args.includes('-d')) {
         try {
@@ -2786,7 +2799,7 @@ async function gitTag(args) {
         }
         return;
     }
-    
+
     // Create tag
     try {
         await git.tag({ fs, dir, ref: tagName, object: await git.resolveRef({ fs, dir, ref: 'HEAD' }) });
@@ -2799,23 +2812,23 @@ async function gitTag(args) {
 
 async function gitShow(args) {
     const dir = await git.findRoot({ fs, filepath: currentDir });
-    
+
     try {
         let ref = 'HEAD';
         if (args.length > 0) {
             ref = args[0];
         }
-        
+
         const oid = await git.resolveRef({ fs, dir, ref });
         const commit = await git.readCommit({ fs, dir, oid });
-        
+
         printNormal(`\x1b[33mcommit ${oid}\x1b[0m`);
         printNormal(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
         printNormal(`Date:   ${new Date(commit.commit.author.timestamp * 1000).toString()}`);
         printNormal('');
         printNormal(`    ${commit.commit.message}`);
         printNormal('');
-        
+
         printHint('Use git show <commit-hash> to view specific commits');
     } catch (error) {
         printError(`fatal: ${error.message}`);
@@ -2825,7 +2838,7 @@ async function gitShow(args) {
 async function gitFetch(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        
+
         // Get HTTP module
         const httpModule = window.GitHttp || window.git?.http;
         if (!httpModule) {
@@ -2833,7 +2846,7 @@ async function gitFetch(args) {
             printHint('Fetch requires network access. Make sure the page loaded correctly.');
             return;
         }
-        
+
         // Check if there's a remote configured
         let remoteUrl;
         try {
@@ -2843,19 +2856,19 @@ async function gitFetch(args) {
             printHint('Add a remote with: git remote add origin <url>');
             return;
         }
-        
+
         if (!remoteUrl) {
             printError('fatal: No remote repository configured.');
             printHint('This repository was not cloned. Add a remote with: git remote add origin <url>');
             return;
         }
-        
+
         // Parse arguments
         const fetchAll = args.includes('--all') || args.includes('-a');
         const prune = args.includes('--prune') || args.includes('-p');
-        
+
         printNormal(`Fetching origin`);
-        
+
         try {
             // Fetch from remote
             let lastPhase = '';
@@ -2865,7 +2878,7 @@ async function gitFetch(args) {
                 dir: dir,
                 url: remoteUrl,
                 remote: 'origin',
-                corsProxy: 'https://cors.isomorphic-git.org',
+                corsProxy: GIT_PROXY,
                 prune: prune,
                 singleBranch: !fetchAll, // If --all, fetch all branches
                 depth: 10,
@@ -2889,9 +2902,9 @@ async function gitFetch(args) {
                     return { username: '', password: '' };
                 }
             });
-            
+
             printNormal(`From ${remoteUrl}`);
-            
+
             // List fetched branches
             const remoteBranches = await git.listBranches({ fs, dir, remote: 'origin' });
             if (remoteBranches.length > 0) {
@@ -2900,15 +2913,15 @@ async function gitFetch(args) {
                     printNormal(`  * [new branch]      ${branch} -> origin/${branch}`);
                 });
             }
-            
+
             printNormal('\x1b[32m✓ Fetch complete!\x1b[0m');
             term.writeln(''); // Blank line before hints
             printHint('Use "git branch -r" to see remote branches');
             printHint('Use "git checkout <branch>" to switch to a fetched branch');
-            
+
         } catch (error) {
             printError(`Failed to fetch: ${error.message}`);
-            
+
             if (error.message.includes('404') || error.message.includes('not found')) {
                 printHint('Remote repository not found. The URL might have changed.');
             } else if (error.message.includes('CORS')) {
@@ -2916,10 +2929,10 @@ async function gitFetch(args) {
             } else {
                 printHint('Make sure you have internet connection and the remote URL is correct.');
             }
-            
+
             console.error('Fetch error details:', error);
         }
-        
+
     } catch (error) {
         printError(`git fetch failed: ${error.message}`);
         console.error('Fetch error:', error);
@@ -2928,7 +2941,7 @@ async function gitFetch(args) {
 
 async function gitStash(args) {
     const dir = await git.findRoot({ fs, filepath: currentDir });
-    
+
     if (args.length === 0 || args[0] === 'push') {
         printNormal('Saved working directory and index state WIP on main: Latest commit');
         printHint('Stash saves your local modifications away and reverts to a clean working directory');
@@ -2936,13 +2949,13 @@ async function gitStash(args) {
         printHint('Note: This learning environment has limited stash support');
         return;
     }
-    
+
     if (args[0] === 'list') {
         printNormal('stash@{0}: WIP on main: abc1234 Latest commit');
         printHint('This shows saved stashes (simulated in learning environment)');
         return;
     }
-    
+
     if (args[0] === 'pop') {
         printNormal('On branch main');
         printNormal('Changes not staged for commit:');
@@ -2951,14 +2964,14 @@ async function gitStash(args) {
         printHint('Stash pop applies the most recent stash and removes it from the stash list');
         return;
     }
-    
+
     printError(`Unknown stash subcommand: ${args[0]}`);
     printHint('Available: git stash [push|pop|list]');
 }
 
 async function gitConfig(args) {
     const dir = await git.findRoot({ fs, filepath: currentDir });
-    
+
     if (args.length === 0) {
         printError('usage: git config [<options>]');
         printHint('Common: git config user.name "Your Name"');
@@ -2966,7 +2979,7 @@ async function gitConfig(args) {
         printHint('        git config --list (to view all settings)');
         return;
     }
-    
+
     if (args[0] === '--list' || args[0] === '-l') {
         try {
             const userName = await git.getConfig({ fs, dir, path: 'user.name' }) || 'Student';
@@ -2979,12 +2992,12 @@ async function gitConfig(args) {
         }
         return;
     }
-    
+
     // Set config
     if (args.length >= 2) {
         const key = args[0];
         const value = args[1];
-        
+
         try {
             await git.setConfig({ fs, dir, path: key, value });
             printNormal(`Set ${key} = ${value}`);
@@ -3012,25 +3025,25 @@ async function updateFileTree() {
     const treeContainer = document.getElementById('fileTree');
     const currentDirDisplay = document.getElementById('currentDir');
     treeContainer.innerHTML = '';
-    
+
     // Update current directory display
     const displayDir = currentDir.replace('/home/student', '~');
     currentDirDisplay.textContent = `📁 ${displayDir}`;
-    
+
     try {
         const tree = await buildFileTree('/home/student');
         treeContainer.innerHTML = tree;
-        
+
         // Add click handlers to files
         const clickableFiles = treeContainer.querySelectorAll('.clickable-file');
         clickableFiles.forEach(fileElement => {
             fileElement.addEventListener('click', async () => {
                 const filepath = fileElement.getAttribute('data-filepath');
                 const filename = filepath.split('/').pop();
-                
+
                 // Echo the command to terminal
                 term.write(`edit ${filename}`);
-                
+
                 try {
                     const content = await pfs.readFile(filepath, 'utf8');
                     editorFile = filepath;
@@ -3043,16 +3056,16 @@ async function updateFileTree() {
                 }
             });
         });
-        
+
         // Add click handlers to directories
         const clickableDirs = treeContainer.querySelectorAll('.clickable-dir');
         clickableDirs.forEach(dirElement => {
             dirElement.addEventListener('click', async () => {
                 const dirpath = dirElement.getAttribute('data-dirpath');
-                
+
                 // Echo the cd command to terminal
                 term.write(`cd ${dirpath.replace('/home/student', '~')}`);
-                
+
                 currentDir = dirpath;
                 await updateFileTree();
                 showPrompt();
@@ -3065,7 +3078,7 @@ async function updateFileTree() {
 
 async function buildFileTree(path, indent = 0) {
     let html = '';
-    
+
     try {
         const files = await pfs.readdir(path);
         const fileInfos = await Promise.all(files.map(async (file) => {
@@ -3078,18 +3091,18 @@ async function buildFileTree(path, indent = 0) {
                 isHidden: file.startsWith('.')
             };
         }));
-        
+
         // Sort: directories first, then files
         fileInfos.sort((a, b) => {
             if (a.isDirectory && !b.isDirectory) return -1;
             if (!a.isDirectory && b.isDirectory) return 1;
             return a.name.localeCompare(b.name);
         });
-        
+
         for (const file of fileInfos) {
             const indentStr = '&nbsp;'.repeat(indent * 4);
             const hiddenClass = file.isHidden ? (file.isDirectory ? 'hidden-folder' : 'hidden-file') : '';
-            
+
             if (file.isDirectory) {
                 // Don't show contents of .git folder
                 if (file.name === '.git') {
@@ -3111,7 +3124,7 @@ async function buildFileTree(path, indent = 0) {
     } catch (error) {
         // Ignore errors for individual files
     }
-    
+
     return html;
 }
 
@@ -3140,9 +3153,9 @@ function openEditor(filename, content) {
     const editorContainer = document.getElementById('editorContainer');
     const editorTitle = document.getElementById('editorTitle');
     let editorElement = document.getElementById('editor');
-    
+
     editorTitle.textContent = `Editing: ${filename}`;
-    
+
     // If CodeMirror instance exists, just update it
     if (codeMirrorInstance) {
         codeMirrorInstance.setValue(content);
@@ -3153,9 +3166,9 @@ function openEditor(filename, content) {
         codeMirrorInstance.focus();
         return;
     }
-    
+
     // Create new CodeMirror instance
-    codeMirrorInstance = CodeMirror(function(elt) {
+    codeMirrorInstance = CodeMirror(function (elt) {
         editorElement.parentNode.replaceChild(elt, editorElement);
     }, {
         value: content,
@@ -3169,15 +3182,15 @@ function openEditor(filename, content) {
         autoCloseBrackets: true,
         matchBrackets: true,
         extraKeys: {
-            'Ctrl-S': function() {
+            'Ctrl-S': function () {
                 saveEditor();
             },
-            'Ctrl-X': function() {
+            'Ctrl-X': function () {
                 closeEditor();
             }
         }
     });
-    
+
     editorContainer.classList.remove('hidden');
     // Force refresh after showing
     setTimeout(() => {
@@ -3188,11 +3201,11 @@ function openEditor(filename, content) {
 
 function closeEditor() {
     const editorContainer = document.getElementById('editorContainer');
-    
+
     // Clear commit message mode flags if still set
     isCommitMessageMode = false;
     commitMessageDir = null;
-    
+
     // Just hide the editor, don't destroy CodeMirror instance
     editorContainer.classList.add('hidden');
     editorFile = null;
@@ -3203,15 +3216,15 @@ function closeEditor() {
 
 async function saveEditor() {
     if (!codeMirrorInstance) return;
-    
+
     // Check if we're in commit message mode
     if (isCommitMessageMode && commitMessageDir) {
         await saveCommitMessage(commitMessageDir);
         return;
     }
-    
+
     const content = codeMirrorInstance.getValue();
-    
+
     try {
         await pfs.writeFile(editorFile, content, 'utf8');
         printHint('File saved successfully. Changes are now in your working directory.');
@@ -3236,7 +3249,7 @@ document.getElementById('closeEditor').addEventListener('click', () => {
 function getCommonPrefix(matches) {
     if (matches.length === 0) return '';
     if (matches.length === 1) return matches[0];
-    
+
     let prefix = matches[0];
     for (let i = 1; i < matches.length; i++) {
         let j = 0;
@@ -3252,12 +3265,12 @@ function getCommonPrefix(matches) {
 async function handleTabCompletion() {
     const parts = currentLine.split(/\s+/);
     const lastPart = parts[parts.length - 1];
-    
+
     // Command completion (if it's the first word)
     if (parts.length === 1) {
         const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'clear', 'reset', 'history', 'grep', 'vi', 'vim', 'nano', 'edit', 'git'];
         const matches = commands.filter(cmd => cmd.startsWith(lastPart));
-        
+
         if (matches.length === 1) {
             const completion = matches[0].substring(lastPart.length);
             currentLine += completion + ' ';
@@ -3281,12 +3294,12 @@ async function handleTabCompletion() {
         }
         return;
     }
-    
+
     // Git subcommand completion
     if (parts.length === 2 && parts[0] === 'git') {
         const gitCommands = ['init', 'status', 'add', 'commit', 'log', 'branch', 'checkout', 'diff', 'reset', 'rm', 'mv', 'merge', 'tag', 'show', 'fetch', 'stash', 'config', 'clone', 'push', 'pull', 'remote'];
         const matches = gitCommands.filter(cmd => cmd.startsWith(lastPart));
-        
+
         if (matches.length === 1) {
             const completion = matches[0].substring(lastPart.length);
             currentLine += completion + ' ';
@@ -3310,19 +3323,19 @@ async function handleTabCompletion() {
         }
         return;
     }
-    
+
     // File/directory completion
     try {
         const files = await pfs.readdir(currentDir);
-        
+
         // Add special directory entries . and ..
         const allEntries = ['.', '..', ...files];
         const matches = allEntries.filter(file => file.startsWith(lastPart));
-        
+
         if (matches.length === 1) {
             const completion = matches[0].substring(lastPart.length);
             let suffix = ' ';
-            
+
             // Determine if it's a directory and add appropriate suffix
             if (matches[0] === '.' || matches[0] === '..') {
                 suffix = '/';
@@ -3331,7 +3344,7 @@ async function handleTabCompletion() {
                 const stats = await pfs.stat(fullPath);
                 suffix = stats.isDirectory() ? '/' : ' ';
             }
-            
+
             currentLine = currentLine.substring(0, currentLine.length - lastPart.length) + matches[0] + suffix;
             cursorPos = currentLine.length;
             term.write('\r\x1b[K');
@@ -3373,7 +3386,7 @@ function startReverseSearch() {
         }, 1000);
         return;
     }
-    
+
     reverseSearchMode = true;
     reverseSearchQuery = '';
     reverseSearchIndex = commandHistory.length;
@@ -3420,7 +3433,7 @@ function searchHistoryReverse() {
         }
         return;
     }
-    
+
     // Search backwards through history with query
     for (let i = reverseSearchIndex - 1; i >= 0; i--) {
         if (commandHistory[i].toLowerCase().includes(reverseSearchQuery.toLowerCase())) {
@@ -3430,7 +3443,7 @@ function searchHistoryReverse() {
             return;
         }
     }
-    
+
     // Wrap around to end
     for (let i = commandHistory.length - 1; i > reverseSearchIndex; i--) {
         if (commandHistory[i].toLowerCase().includes(reverseSearchQuery.toLowerCase())) {
@@ -3440,7 +3453,7 @@ function searchHistoryReverse() {
             return;
         }
     }
-    
+
     // No match found - show failed search indicator
     currentLine = '';
     updateReverseSearchPrompt(true);
@@ -3449,7 +3462,7 @@ function searchHistoryReverse() {
 // Terminal input handling
 term.onData(data => {
     const code = data.charCodeAt(0);
-    
+
     // Ctrl+R - Reverse search
     if (code === 18) { // Ctrl+R
         if (reverseSearchMode) {
@@ -3459,13 +3472,13 @@ term.onData(data => {
         }
         return;
     }
-    
+
     // Ctrl+C or Escape - Exit reverse search
     if ((code === 3 || code === 27) && reverseSearchMode) {
         exitReverseSearch(false);
         return;
     }
-    
+
     // Handle reverse search mode
     if (reverseSearchMode) {
         if (code === 13) { // Enter - accept current match
@@ -3491,7 +3504,7 @@ term.onData(data => {
         }
         return;
     }
-    
+
     // Handle special keys
     if (code === 13) { // Enter
         term.write('\r\n');
@@ -3572,7 +3585,7 @@ document.getElementById('resetBtn').addEventListener('click', async () => {
 });
 
 // Debug function - expose to window for console testing
-window.debugGit = function() {
+window.debugGit = function () {
     console.log('=== Git Debug Info ===');
     console.log('window.git:', !!window.git);
     console.log('window.git.http:', !!window.git?.http);
@@ -3581,7 +3594,7 @@ window.debugGit = function() {
     console.log('git.version:', git.version?.());
     console.log('fs:', !!fs);
     console.log('LightningFS:', !!window.LightningFS);
-    
+
     // Try to list what's on window.git
     if (window.git) {
         console.log('window.git keys:', Object.keys(window.git).slice(0, 20));
