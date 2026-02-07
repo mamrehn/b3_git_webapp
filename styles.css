@@ -73,6 +73,12 @@ body {
     border: 1px solid rgba(241, 76, 76, 0.3);
 }
 
+.connection-status.warning {
+    color: #faad14;
+    background-color: rgba(250, 173, 20, 0.1);
+    border: 1px solid rgba(250, 173, 20, 0.3);
+}
+
 .reset-btn {
     background-color: #d97706;
     color: white;

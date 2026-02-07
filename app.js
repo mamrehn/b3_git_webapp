@@ -45,24 +45,36 @@ const DEFAULT_USER = { name: 'Student', email: 'student@example.com' };
 
 // Test CORS proxies and use the first one that works
 async function findWorkingProxy() {
+    console.log('🔍 Testing CORS proxies...');
     for (const proxy of CORS_PROXIES) {
         try {
             // Test with a lightweight request to GitHub's git info/refs
+            // increased timeout to 10s for slower connections
             const testUrl = proxy.includes('?url=')
                 ? `${proxy}https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`
                 : `${proxy}/https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`;
-            const response = await fetch(testUrl, { method: 'GET', signal: AbortSignal.timeout(5000) });
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+            const response = await fetch(testUrl, {
+                method: 'GET',
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
             if (response.ok) {
                 console.log(`✅ CORS proxy working: ${proxy}`);
-                return proxy;
+                return { url: proxy, verified: true };
             }
             console.warn(`❌ CORS proxy returned ${response.status}: ${proxy}`);
         } catch (e) {
             console.warn(`❌ CORS proxy failed: ${proxy}`, e.message);
         }
     }
-    console.error('❌ No working CORS proxy found');
-    return null;
+    console.warn('⚠️ No working CORS proxy found during check, defaulting to first option');
+    return { url: CORS_PROXIES[0], verified: false };
 }
 
 // Initialize filesystem
@@ -108,17 +120,19 @@ async function init() {
 
         // Find a working CORS proxy and update status indicator
         const statusEl = document.getElementById('connectionStatus');
-        const workingProxy = await findWorkingProxy();
-        if (workingProxy) {
-            GIT_PROXY = workingProxy;
+        const proxyResult = await findWorkingProxy();
+
+        GIT_PROXY = proxyResult.url;
+
+        if (proxyResult.verified) {
             statusEl.textContent = 'Online (proxy connected)';
             statusEl.className = 'connection-status connected';
-            statusEl.title = `Using CORS proxy: ${workingProxy}`;
+            statusEl.title = `Using verified CORS proxy: ${GIT_PROXY}`;
         } else {
-            console.warn('⚠️  No working CORS proxy found, remote operations will use fallback');
-            statusEl.textContent = 'Offline (no proxy)';
-            statusEl.className = 'connection-status disconnected';
-            statusEl.title = 'No working CORS proxy found. Clone/push/pull/fetch will not work with remote repos.';
+            statusEl.textContent = 'Online (unverified proxy)';
+            statusEl.className = 'connection-status warning';
+            statusEl.title = `Proxy check failed, but forcing use of: ${GIT_PROXY}. Operations might still work.`;
+            console.warn('⚠️ Proxy check failed, but application will attempt to use default proxy.');
         }
 
         // Setup directory structure
