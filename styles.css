@@ -42,6 +42,37 @@ body {
     color: #cccccc;
 }
 
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.connection-status {
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.connection-status.checking {
+    color: #e5e510;
+    background-color: rgba(229, 229, 16, 0.1);
+    border: 1px solid rgba(229, 229, 16, 0.3);
+}
+
+.connection-status.connected {
+    color: #0dbc79;
+    background-color: rgba(13, 188, 121, 0.1);
+    border: 1px solid rgba(13, 188, 121, 0.3);
+}
+
+.connection-status.disconnected {
+    color: #f14c4c;
+    background-color: rgba(241, 76, 76, 0.1);
+    border: 1px solid rgba(241, 76, 76, 0.3);
+}
+
 .reset-btn {
     background-color: #d97706;
     color: white;
@@ -347,5 +378,9 @@ body {
 @media (max-width: 768px) {
     .left-panel {
         width: 200px;
+    }
+
+    .connection-status {
+        display: none;
     }
 }

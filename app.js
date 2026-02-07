@@ -35,9 +35,35 @@ window.addEventListener('resize', () => {
 });
 
 // Constants
-const GIT_PROXY = 'https://cors.isomorphic-git.org';
+const CORS_PROXIES = [
+    'https://cors.isomorphic-git.org',
+    'https://corsproxy.io/?url=',
+];
+let GIT_PROXY = CORS_PROXIES[0];
 const DEFAULT_REPO_URL = 'https://github.com/mamrehn/project1.git';
 const DEFAULT_USER = { name: 'Student', email: 'student@example.com' };
+
+// Test CORS proxies and use the first one that works
+async function findWorkingProxy() {
+    for (const proxy of CORS_PROXIES) {
+        try {
+            // Test with a lightweight request to GitHub's git info/refs
+            const testUrl = proxy.includes('?url=')
+                ? `${proxy}https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`
+                : `${proxy}/https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`;
+            const response = await fetch(testUrl, { method: 'GET', signal: AbortSignal.timeout(5000) });
+            if (response.ok) {
+                console.log(`✅ CORS proxy working: ${proxy}`);
+                return proxy;
+            }
+            console.warn(`❌ CORS proxy returned ${response.status}: ${proxy}`);
+        } catch (e) {
+            console.warn(`❌ CORS proxy failed: ${proxy}`, e.message);
+        }
+    }
+    console.error('❌ No working CORS proxy found');
+    return null;
+}
 
 // Initialize filesystem
 const fs = new LightningFS('gitlearning');
@@ -78,6 +104,21 @@ async function init() {
             console.log('✅ HTTP module loaded successfully');
         } else {
             console.warn('⚠️  HTTP module not loaded, cloning will fallback to sample project');
+        }
+
+        // Find a working CORS proxy and update status indicator
+        const statusEl = document.getElementById('connectionStatus');
+        const workingProxy = await findWorkingProxy();
+        if (workingProxy) {
+            GIT_PROXY = workingProxy;
+            statusEl.textContent = 'Online (proxy connected)';
+            statusEl.className = 'connection-status connected';
+            statusEl.title = `Using CORS proxy: ${workingProxy}`;
+        } else {
+            console.warn('⚠️  No working CORS proxy found, remote operations will use fallback');
+            statusEl.textContent = 'Offline (no proxy)';
+            statusEl.className = 'connection-status disconnected';
+            statusEl.title = 'No working CORS proxy found. Clone/push/pull/fetch will not work with remote repos.';
         }
 
         // Setup directory structure
@@ -458,11 +499,31 @@ async function processCommand(cmd) {
     commandHistory.push(trimmedCmd);
     historyIndex = commandHistory.length;
 
+    // Handle && chaining (split and run sequentially, stop on failure)
+    if (trimmedCmd.includes('&&')) {
+        const chainedCmds = trimmedCmd.split('&&').map(c => c.trim()).filter(c => c);
+        for (const subcmd of chainedCmds) {
+            try {
+                await executeSingleCommand(subcmd);
+            } catch (error) {
+                printError(`Error: ${error.message}`);
+                break; // Stop chain on failure, like real bash
+            }
+        }
+        await updateFileTree();
+        showPrompt();
+        return;
+    }
+
+    await executeSingleCommand(trimmedCmd);
+    await updateFileTree();
+    showPrompt();
+}
+
+async function executeSingleCommand(trimmedCmd) {
     // Handle pipes
     if (trimmedCmd.includes('|')) {
         await processPipedCommands(trimmedCmd);
-        await updateFileTree();
-        showPrompt();
         return;
     }
 
@@ -517,6 +578,9 @@ async function processCommand(cmd) {
             case 'edit':
                 await cmdEdit(args);
                 break;
+            case 'echo':
+                await cmdEcho(args, trimmedCmd);
+                break;
             case 'git':
                 await cmdGit(args);
                 break;
@@ -527,9 +591,6 @@ async function processCommand(cmd) {
     } catch (error) {
         printError(`Error: ${error.message}`);
     }
-
-    await updateFileTree();
-    showPrompt();
 }
 
 async function cmdReset() {
@@ -655,6 +716,7 @@ async function cmdHelp() {
     printNormal('  mkdir <directory>     - Create directory');
     printNormal('  touch <file>          - Create empty file');
     printNormal('  rm <file>             - Remove file');
+    printNormal('  echo <text>           - Print text or redirect to file');
     printNormal('  vi/vim/nano <file>    - Edit file');
     printNormal('  clear                 - Clear terminal');
     printNormal('  reset                 - Reset filesystem to initial state');
@@ -662,7 +724,10 @@ async function cmdHelp() {
     printNormal('  debug                 - Show debug information');
     printNormal('');
     printNormal('\x1b[36mAdvanced Features:\x1b[0m');
+    printNormal('  <cmd> && <cmd>        - Chain commands (stops on error)');
     printNormal('  <cmd> | grep <text>   - Filter output with grep');
+    printNormal('  echo "text" > file    - Write text to file');
+    printNormal('  echo "text" >> file   - Append text to file');
     printNormal('  Ctrl+R                - Reverse history search');
     printNormal('  Tab                   - Auto-complete commands/files');
     printNormal('  ↑/↓                   - Navigate command history');
@@ -846,12 +911,54 @@ async function cmdTouch(args) {
     const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
 
     try {
-        await pfs.writeFile(filepath, '', 'utf8');
-        printNormal(`File created: ${filename}`);
-        printHint('Use "vi ' + filename + '" or "nano ' + filename + '" to edit it');
+        // Only create the file if it doesn't already exist (real touch updates mtime)
+        try {
+            await pfs.stat(filepath);
+            // File exists -- real touch updates timestamp, but LightningFS doesn't support that
+            // so just silently succeed like real touch
+        } catch (e) {
+            // File doesn't exist, create it
+            await pfs.writeFile(filepath, '', 'utf8');
+            printHint('Use "vi ' + filename + '" or "nano ' + filename + '" to edit it');
+        }
     } catch (error) {
         printError(`touch: cannot create file '${filename}': ${error.message}`);
     }
+}
+
+async function cmdEcho(_args, fullCmd) {
+    // Parse the full command to handle quotes and redirects properly
+    // Extract everything after "echo "
+    const echoContent = fullCmd.replace(/^echo\s*/, '');
+
+    // Check for redirect operators: > (overwrite) or >> (append)
+    const appendMatch = echoContent.match(/^(.*?)\s*>>\s*(.+)$/);
+    const overwriteMatch = echoContent.match(/^(.*?)\s*>\s*(.+)$/);
+
+    if (appendMatch || overwriteMatch) {
+        const isAppend = !!appendMatch;
+        const match = isAppend ? appendMatch : overwriteMatch;
+        let text = match[1].trim().replace(/^["']|["']$/g, '');
+        const filename = match[2].trim();
+        const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+
+        try {
+            if (isAppend) {
+                let existing = '';
+                try { existing = await pfs.readFile(filepath, 'utf8'); } catch (e) { /* new file */ }
+                await pfs.writeFile(filepath, existing + text + '\n', 'utf8');
+            } else {
+                await pfs.writeFile(filepath, text + '\n', 'utf8');
+            }
+        } catch (error) {
+            printError(`echo: ${error.message}`);
+        }
+        return;
+    }
+
+    // No redirect, just print to terminal
+    const text = echoContent.replace(/^["']|["']$/g, '');
+    printNormal(text);
 }
 
 async function cmdRm(args) {
@@ -1036,10 +1143,11 @@ async function gitStatus(args) {
             printNormal('');
         }
 
-        const staged = [];
+        const staged = [];     // { filepath, type } where type is 'new file'|'modified'|'deleted'
         const modified = [];
         const untracked = [];
         const conflicted = [];
+        const deleted = [];
 
         for (const [filepath, HEADStatus, workdirStatus, stageStatus] of status) {
             // Skip .git directory entries
@@ -1063,17 +1171,21 @@ async function gitStatus(args) {
             // stageStatus: 0 = absent, 1 = unchanged, 2 = added, 3 = modified
 
             if (HEADStatus === 0 && workdirStatus === 2 && stageStatus === 2) {
-                staged.push(filepath);
+                staged.push({ filepath, type: 'new file' });
             } else if (HEADStatus === 1 && workdirStatus === 2 && stageStatus === 2) {
-                staged.push(filepath);
+                staged.push({ filepath, type: 'modified' });
+            } else if (HEADStatus === 1 && stageStatus === 2 && workdirStatus === 0) {
+                staged.push({ filepath, type: 'deleted' });
             } else if (workdirStatus === 2 && stageStatus === 1) {
                 modified.push(filepath);
+            } else if (HEADStatus === 1 && workdirStatus === 0 && stageStatus === 1) {
+                deleted.push(filepath);
             } else if (HEADStatus === 0 && workdirStatus === 2 && stageStatus === 0) {
                 untracked.push(filepath);
             }
         }
 
-        if (staged.length === 0 && modified.length === 0 && untracked.length === 0 && conflicted.length === 0) {
+        if (staged.length === 0 && modified.length === 0 && untracked.length === 0 && conflicted.length === 0 && deleted.length === 0) {
             if (!mergeInProgress) {
                 printNormal('\nnothing to commit, working tree clean');
                 printHint('Your working directory is clean. Try modifying a file or creating a new one!');
@@ -1095,8 +1207,8 @@ async function gitStatus(args) {
             printNormal('\nChanges to be committed:');
             printNormal('  (use "git reset HEAD <file>..." to unstage)');
             printNormal('');
-            staged.forEach(file => {
-                term.writeln(`\t\x1b[32mnew file:   ${file}\x1b[0m`);
+            staged.forEach(({ filepath, type }) => {
+                term.writeln(`\t\x1b[32m${type}:   ${filepath}\x1b[0m`);
             });
             printHint('These files are staged and ready to commit with "git commit -m <message>"');
         }
@@ -1109,6 +1221,16 @@ async function gitStatus(args) {
                 term.writeln(`\t\x1b[31mmodified:   ${file}\x1b[0m`);
             });
             printHint('Use "git add <file>" to stage these changes for commit');
+        }
+
+        if (deleted.length > 0) {
+            printNormal('\nChanges not staged for commit:');
+            printNormal('  (use "git add/rm <file>..." to update what will be committed)');
+            printNormal('');
+            deleted.forEach(file => {
+                term.writeln(`\t\x1b[31mdeleted:    ${file}\x1b[0m`);
+            });
+            printHint('Use "git rm <file>" to stage the deletion for commit');
         }
 
         if (untracked.length > 0) {
@@ -1138,12 +1260,15 @@ async function gitAdd(args) {
         const file = args[0];
 
         if (file === '.') {
-            // Add all files
+            // Add all files (including deletions)
             const status = await git.statusMatrix({ fs, dir });
             for (const [filepath, HEADStatus, workdirStatus] of status) {
                 if (filepath.startsWith('.git/')) continue;
                 if (workdirStatus === 2) {
                     await git.add({ fs, dir, filepath });
+                } else if (HEADStatus === 1 && workdirStatus === 0) {
+                    // File was deleted from working directory
+                    await git.remove({ fs, dir, filepath });
                 }
             }
             printNormal('All changes added to staging area');
@@ -1177,6 +1302,8 @@ async function gitCommit(args) {
             return;
         }
 
+        const currentBranch = await git.currentBranch({ fs, dir }).catch(() => 'main') || 'main';
+
         const sha = await git.commit({
             fs,
             dir,
@@ -1184,7 +1311,7 @@ async function gitCommit(args) {
             message
         });
 
-        printNormal(`[main ${sha.substring(0, 7)}] ${message}`);
+        printNormal(`[${currentBranch} ${sha.substring(0, 7)}] ${message}`);
         printHint('Commit created! Use "git log" to see your commit history');
     } catch (error) {
         printError(`git commit failed: ${error.message}`);
@@ -1301,6 +1428,7 @@ async function saveCommitMessage(dir) {
 
         // Get first line for summary
         const firstLine = message.split('\n')[0];
+        const branchName = await git.currentBranch({ fs, dir }).catch(() => 'main') || 'main';
 
         // Clear commit message mode flags
         isCommitMessageMode = false;
@@ -1311,7 +1439,7 @@ async function saveCommitMessage(dir) {
 
         // Use setTimeout to ensure terminal is ready to receive output
         setTimeout(() => {
-            printNormal(`[main ${sha.substring(0, 7)}] ${firstLine}`);
+            printNormal(`[${branchName} ${sha.substring(0, 7)}] ${firstLine}`);
             printHint('Commit created! Use "git log" to see your commit history');
             showPrompt();
         }, 100);
@@ -2681,21 +2809,11 @@ async function gitMerge(args) {
     }
 
     const dir = await git.findRoot({ fs, filepath: currentDir });
-    const branchToMerge = args[0];
 
     try {
-        const branches = await git.listBranches({ fs, dir });
-        if (!branches.includes(branchToMerge)) {
-            printError(`error: pathspec '${branchToMerge}' did not match any file(s) known to git`);
-            return;
-        }
-
-        const currentBranch = await git.currentBranch({ fs, dir });
-
-        // Check for --abort flag
+        // Check for --abort flag first (before branch validation)
         if (args.includes('--abort')) {
             try {
-                // Read merge state
                 const mergeHeadPath = `${dir}/.git/MERGE_HEAD`;
                 await pfs.unlink(mergeHeadPath);
                 printNormal('Merge aborted.');
@@ -2706,6 +2824,15 @@ async function gitMerge(args) {
                 return;
             }
         }
+
+        const branchToMerge = args[0];
+        const branches = await git.listBranches({ fs, dir });
+        if (!branches.includes(branchToMerge)) {
+            printError(`error: pathspec '${branchToMerge}' did not match any file(s) known to git`);
+            return;
+        }
+
+        const currentBranch = await git.currentBranch({ fs, dir });
 
         const result = await git.merge({
             fs,
@@ -3076,6 +3203,10 @@ async function updateFileTree() {
     }
 }
 
+function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 async function buildFileTree(path, indent = 0) {
     let html = '';
 
@@ -3102,22 +3233,20 @@ async function buildFileTree(path, indent = 0) {
         for (const file of fileInfos) {
             const indentStr = '&nbsp;'.repeat(indent * 4);
             const hiddenClass = file.isHidden ? (file.isDirectory ? 'hidden-folder' : 'hidden-file') : '';
+            const safeName = escapeHtml(file.name);
+            const safePath = escapeHtml(file.path);
 
             if (file.isDirectory) {
                 // Don't show contents of .git folder
-                if (file.name === '.git') {
-                    html += `<div class="tree-folder ${hiddenClass} clickable-dir" data-dirpath="${file.path}" style="margin-left: ${indent * 15}px; cursor: pointer;">`;
-                    html += `<span class="folder-icon"></span>${file.name}/`;
-                    html += `</div>`;
-                } else {
-                    html += `<div class="tree-folder ${hiddenClass} clickable-dir" data-dirpath="${file.path}" style="margin-left: ${indent * 15}px; cursor: pointer;">`;
-                    html += `<span class="folder-icon"></span>${file.name}/`;
-                    html += `</div>`;
+                html += `<div class="tree-folder ${hiddenClass} clickable-dir" data-dirpath="${safePath}" style="margin-left: ${indent * 15}px; cursor: pointer;">`;
+                html += `<span class="folder-icon"></span>${safeName}/`;
+                html += `</div>`;
+                if (file.name !== '.git') {
                     html += await buildFileTree(file.path, indent + 1);
                 }
             } else {
-                html += `<div class="tree-file ${hiddenClass} clickable-file" data-filepath="${file.path}" style="margin-left: ${indent * 15}px">`;
-                html += `<span class="file-icon"></span>${file.name}`;
+                html += `<div class="tree-file ${hiddenClass} clickable-file" data-filepath="${safePath}" style="margin-left: ${indent * 15}px">`;
+                html += `<span class="file-icon"></span>${safeName}`;
                 html += `</div>`;
             }
         }
@@ -3268,7 +3397,7 @@ async function handleTabCompletion() {
 
     // Command completion (if it's the first word)
     if (parts.length === 1) {
-        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'clear', 'reset', 'history', 'grep', 'vi', 'vim', 'nano', 'edit', 'git'];
+        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'echo', 'clear', 'reset', 'history', 'grep', 'vi', 'vim', 'nano', 'edit', 'git'];
         const matches = commands.filter(cmd => cmd.startsWith(lastPart));
 
         if (matches.length === 1) {
