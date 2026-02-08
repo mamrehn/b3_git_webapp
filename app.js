@@ -997,14 +997,20 @@ async function cmdMkdir(args) {
         return;
     }
 
-    const dirname = args[0];
-    const dirpath = dirname.startsWith('/') ? dirname : `${currentDir}/${dirname}`;
+    // Extract flags
+    const flags = args.filter(a => a.startsWith('-'));
+    const dirs = args.filter(a => !a.startsWith('-'));
+    const recursive = flags.includes('-p');
 
-    try {
-        await pfs.mkdir(dirpath, { recursive: true });
-        // Directory created silently, like in real terminals
-    } catch (error) {
-        printError(`mkdir: cannot create directory '${dirname}': ${error.message}`);
+    for (const dirname of dirs) {
+        const dirpath = dirname.startsWith('/') ? dirname : `${currentDir}/${dirname}`;
+
+        try {
+            await pfs.mkdir(dirpath, { recursive: true });
+            // Directory created silently, like in real terminals
+        } catch (error) {
+            printError(`mkdir: cannot create directory '${dirname}': ${error.message}`);
+        }
     }
 }
 
@@ -1014,22 +1020,22 @@ async function cmdTouch(args) {
         return;
     }
 
-    const filename = args[0];
-    const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+    for (const filename of args) {
+        const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
 
-    try {
-        // Only create the file if it doesn't already exist (real touch updates mtime)
         try {
-            await pfs.stat(filepath);
-            // File exists -- real touch updates timestamp, but LightningFS doesn't support that
-            // so just silently succeed like real touch
-        } catch (e) {
-            // File doesn't exist, create it
-            await pfs.writeFile(filepath, '', 'utf8');
-            printHint('Use "vi ' + filename + '" or "nano ' + filename + '" to edit it');
+            // Only create the file if it doesn't already exist (real touch updates mtime)
+            try {
+                await pfs.stat(filepath);
+                // File exists -- real touch updates timestamp, but LightningFS doesn't support that
+                // so just silently succeed like real touch
+            } catch (e) {
+                // File doesn't exist, create it
+                await pfs.writeFile(filepath, '', 'utf8');
+            }
+        } catch (error) {
+            printError(`touch: cannot create file '${filename}': ${error.message}`);
         }
-    } catch (error) {
-        printError(`touch: cannot create file '${filename}': ${error.message}`);
     }
 }
 
@@ -1074,14 +1080,23 @@ async function cmdRm(args) {
         return;
     }
 
-    const filename = args[0];
-    const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+    // Extract flags
+    const flags = args.filter(a => a.startsWith('-'));
+    const files = args.filter(a => !a.startsWith('-'));
 
-    try {
-        await pfs.unlink(filepath);
-        printNormal(`File removed: ${filename}`);
-    } catch (error) {
-        printError(`rm: cannot remove '${filename}': ${error.message}`);
+    if (files.length === 0) {
+        printError('rm: missing operand');
+        return;
+    }
+
+    for (const filename of files) {
+        const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+
+        try {
+            await pfs.unlink(filepath);
+        } catch (error) {
+            printError(`rm: cannot remove '${filename}': ${error.message}`);
+        }
     }
 }
 
@@ -4294,7 +4309,8 @@ async function gitReflog(args) {
         const dir = await git.findRoot({ fs, filepath: currentDir });
 
         // isomorphic-git doesn't have reflog support, so we simulate it
-        // by showing recent commits with a reflog-like format
+        // by showing recent commits with a reflog-like format and
+        // inferring the action type from the commit message.
         const commits = await git.log({ fs, dir, depth: 20 });
         const currentBranch = await git.currentBranch({ fs, dir }).catch(() => 'HEAD') || 'HEAD';
 
@@ -4302,8 +4318,21 @@ async function gitReflog(args) {
         commits.forEach((commit, index) => {
             const shortOid = commit.oid.substring(0, 7);
             const message = commit.commit.message.split('\n')[0];
-            const action = index === 0 ? `${currentBranch}: commit` : 'commit';
-            term.writeln(`\\x1b[33m${shortOid}\\x1b[0m ${currentBranch}@{${index}}: ${action}: ${message}`);
+
+            // Infer the reflog action from the commit message
+            let action;
+            if (message.startsWith('Merge branch') || message.startsWith('Merge pull request')) {
+                // Merge commits
+                const mergeTarget = message.match(/Merge (?:branch|pull request) .*/);
+                action = mergeTarget ? mergeTarget[0] : `merge: ${message}`;
+            } else if (index === 0) {
+                // Most recent entry — show as commit (initial)
+                action = `commit: ${message}`;
+            } else {
+                action = `commit: ${message}`;
+            }
+
+            term.writeln(`\\x1b[33m${shortOid}\\x1b[0m HEAD@{${index}}: ${action}`);
         });
 
         printNormal('');
@@ -4519,6 +4548,13 @@ async function gitBlame(args) {
         const filename = args[0];
         const filepath = filename.startsWith('/') ? filename : `${dir}/${filename}`;
 
+        // Compute the file's path relative to the repo root
+        let relFile = filepath;
+        if (filepath.startsWith(dir)) {
+            relFile = filepath.slice(dir.length);
+            if (relFile.startsWith('/')) relFile = relFile.slice(1);
+        }
+
         // Read the current file
         let content;
         try {
@@ -4528,24 +4564,94 @@ async function gitBlame(args) {
             return;
         }
 
-        const lines = content.split('\n');
+        const currentLines = content.split('\n');
+        // Remove trailing empty element from a final newline
+        if (currentLines.length > 0 && currentLines[currentLines.length - 1] === '') {
+            currentLines.pop();
+        }
 
-        // Get commit history to find who modified what
-        // (Simplified: show the most recent commit for all lines)
-        const commits = await git.log({ fs, dir, depth: 1 });
-        const lastCommit = commits[0];
+        // Walk the commit history and do per-line blame tracking
+        const commits = await git.log({ fs, dir });
 
+        // For each line, find the commit that last changed it
+        // Start by attributing every line to the most recent commit,
+        // then walk backwards and re-attribute lines whose content
+        // appeared identically in the parent commit (meaning a later
+        // commit actually introduced the current text).
+        const blameInfo = currentLines.map(() => (commits.length > 0 ? commits[0] : null));
+
+        if (commits.length > 1) {
+            try {
+                // Build a map: for each commit that touches this file,
+                // record its lines so we can compare.
+                const commitFileLines = new Map();
+                for (const commit of commits) {
+                    try {
+                        const result = await git.readBlob({ fs, dir, oid: commit.oid, filepath: relFile });
+                        const text = new TextDecoder().decode(result.blob);
+                        const lines = text.split('\n');
+                        if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+                        commitFileLines.set(commit.oid, lines);
+                    } catch {
+                        // File didn't exist in this commit
+                        commitFileLines.set(commit.oid, null);
+                    }
+                }
+
+                // Walk commits from newest to oldest.  For each line
+                // still attributed to commit[i], check if the same
+                // line text exists in commit[i+1] (its parent in our
+                // linear walk).  If so, push blame further back.
+                for (let i = 0; i < commits.length - 1; i++) {
+                    const curOid = commits[i].oid;
+                    const parentOid = commits[i + 1].oid;
+                    const curLines = commitFileLines.get(curOid);
+                    const parentLines = commitFileLines.get(parentOid);
+
+                    if (!curLines || !parentLines) continue;
+
+                    for (let ln = 0; ln < currentLines.length; ln++) {
+                        if (blameInfo[ln] && blameInfo[ln].oid === curOid) {
+                            // If the line exists identically in the parent, attribute to parent
+                            if (ln < parentLines.length && parentLines[ln] === currentLines[ln]) {
+                                blameInfo[ln] = commits[i + 1];
+                            }
+                        }
+                    }
+                }
+            } catch {
+                // If per-line tracking fails, we still have the fallback
+                // (all lines attributed to HEAD).
+            }
+        }
+
+        // Format and output
         printNormal('');
-        lines.forEach((line, index) => {
+
+        // Find max author name length for alignment (capped at 15)
+        const maxAuthor = Math.min(15, blameInfo.reduce((max, c) => {
+            const len = c ? c.commit.author.name.length : 7;
+            return Math.max(max, len);
+        }, 0));
+
+        currentLines.forEach((line, index) => {
+            const commit = blameInfo[index];
             const lineNum = String(index + 1).padStart(4);
-            const shortOid = lastCommit ? lastCommit.oid.substring(0, 8) : '00000000';
-            const author = lastCommit ? lastCommit.commit.author.name.substring(0, 10).padEnd(10) : 'Unknown   ';
-            term.writeln(`\\x1b[33m${shortOid}\\x1b[0m (${author} ${lineNum}) ${line}`);
+            if (commit) {
+                const shortOid = commit.oid.substring(0, 8);
+                const author = commit.commit.author.name.substring(0, maxAuthor).padEnd(maxAuthor);
+                const date = new Date(commit.commit.author.timestamp * 1000);
+                const dateStr = date.toISOString().slice(0, 10);
+                term.writeln(`\\x1b[33m${shortOid}\\x1b[0m (${author} ${dateStr} ${lineNum}) ${line}`);
+            } else {
+                const oid = '00000000';
+                const author = 'Unknown'.padEnd(maxAuthor);
+                term.writeln(`\\x1b[33m${oid}\\x1b[0m (${author}            ${lineNum}) ${line}`);
+            }
         });
 
         printNormal('');
         printHint('Blame shows who last modified each line of a file');
-        printHint('Note: This is a simplified version - real git blame tracks per-line history');
     } catch (error) {
         printError(`git blame failed: ${error.message}`);
     }
