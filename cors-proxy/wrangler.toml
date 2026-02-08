@@ -1,0 +1,8 @@
+name = "isomorphic-git-cors-proxy"
+main = "worker.js"
+compatibility_date = "2023-10-30"
+
+# Optional: Add routes if you have a custom domain
+# routes = [
+#   { pattern = "git-proxy.yourdomain.com", custom_domain = true }
+# ]

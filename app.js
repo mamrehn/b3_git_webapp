@@ -36,6 +36,7 @@ window.addEventListener('resize', () => {
 
 // Constants
 const CORS_PROXIES = [
+    // 'https://<your-subdomain>.workers.dev/', // TODO: Uncomment and add your worker URL here
     'https://cors.isomorphic-git.org',
     'https://corsproxy.io/?url=',
 ];
