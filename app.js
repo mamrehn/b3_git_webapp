@@ -2100,7 +2100,7 @@ async function gitCheckout(args) {
         // Check for -- (file checkout / discard changes)
         const dashDashIndex = args.indexOf('--');
         if (dashDashIndex !== -1) {
-            // git checkout -- <file> : discard working tree changes
+            // git checkout [tree-ish] -- <file>
             const files = args.slice(dashDashIndex + 1);
             if (files.length === 0) {
                 printError('Please specify a file after --');
@@ -2108,25 +2108,32 @@ async function gitCheckout(args) {
                 return;
             }
 
+            let sourceRef = null;
+            if (dashDashIndex > 0) {
+                sourceRef = args[0];
+            }
+
             for (const file of files) {
                 const filepath = file.startsWith('/') ? file : `${dir}/${file}`;
 
                 try {
-                    // Get file content from HEAD
-                    const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
-                    const { blob } = await git.readBlob({
-                        fs,
-                        dir,
-                        oid: headOid,
-                        filepath: file
-                    });
+                    let blob;
+                    if (sourceRef) {
+                        const sourceOid = await git.resolveRef({ fs, dir, ref: sourceRef });
+                        const result = await git.readBlob({ fs, dir, oid: sourceOid, filepath: file });
+                        blob = result.blob;
+                    } else {
+                        // Read from Index
+                        const result = await git.readBlob({ fs, dir, filepath: file });
+                        blob = result.blob;
+                    }
 
                     // Write the content back to working tree
                     const content = new TextDecoder().decode(blob);
                     await pfs.writeFile(filepath, content, 'utf8');
-                    printNormal(`Updated 1 path from the index`);
+                    printNormal(`Updated 1 path from ${sourceRef || 'the index'}`);
                 } catch (e) {
-                    // File might not exist in HEAD (new file)
+                    // File might not exist in source
                     printError(`error: pathspec '${file}' did not match any file(s) known to git`);
                 }
             }
@@ -2323,6 +2330,9 @@ async function printDiffCommitWorkdir(dir, oid, specificFile) {
         if (filepath.startsWith('.git/')) continue;
         if (specificFile && filepath !== specificFile) continue;
 
+        // Ignore untracked files (not in stage)
+        if (stageStatus === 0) continue;
+
         let oldContent = '';
         let newContent = '';
         let showDiff = false;
@@ -2337,9 +2347,12 @@ async function printDiffCommitWorkdir(dir, oid, specificFile) {
         }
 
         // Get workdir content
-        try {
-            newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8');
-        } catch (e) { }
+        // If workdirStatus is 0, file is deleted in workdir
+        if (workdirStatus !== 0) {
+            try {
+                newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8');
+            } catch (e) { }
+        }
 
         if (oldContent !== newContent) {
             await printColorizedDiff(oldContent, newContent, filepath);
@@ -2355,7 +2368,8 @@ async function printDiffStaged(dir, specificFile) {
         if (filepath.startsWith('.git/')) continue;
         if (specificFile && filepath !== specificFile) continue;
 
-        if (stageStatus === 2 || stageStatus === 3) {
+        // Check for staged changes (added/modified) OR staged deletion (HEAD=1, Stage=0)
+        if (stageStatus === 2 || stageStatus === 3 || (HEADStatus === 1 && stageStatus === 0)) {
             hasChanges = true;
             let oldContent = '';
             let newContent = '';
@@ -2407,8 +2421,16 @@ async function printDiffWorkdirIndex(dir, specificFile) {
         if (filepath.startsWith('.git/')) continue;
         if (specificFile && filepath !== specificFile) continue;
 
-        // workdirStatus: 2 = modified (different from index)
-        if (workdirStatus === 2 && stageStatus !== 2 && stageStatus !== 3) {
+        // Ignore untracked files (stageStatus 0)
+        if (stageStatus === 0) continue;
+
+        // workdirStatus: 2 = modified (different from index), 0 = deleted
+        // We show diff if workdirStatus is 0 (deleted) OR 
+        // workdirStatus is 2 (modified) AND stageStatus is not 2 (identical to workdir)
+        // Wait, stageStatus 2 means "added to index, identical to workdir"? 
+        // If stageStatus is 2, workdir matches index. so no diff.
+
+        if (workdirStatus === 0 || (workdirStatus === 2 && stageStatus !== 2)) {
             hasChanges = true;
             let oldContent = ''; // Index content
             let newContent = ''; // Workdir content
@@ -4004,15 +4026,15 @@ async function gitRestore(args) {
         const hasWorktree = args.includes('--worktree') || args.includes('-W');
 
         // Parse --source=<commit>
-        let source = 'HEAD';
+        let sourceRef = null;
         const sourceArg = args.find(a => a.startsWith('--source='));
         if (sourceArg) {
-            source = sourceArg.split('=')[1];
+            sourceRef = sourceArg.split('=')[1];
         }
 
         // Filter out flags to get file paths
         const files = args.filter(a =>
-            !a.startsWith('--') && a !== '-S' && a !== '-W'
+            !a.startsWith('--') && a !== '-S' && a !== '-W' && !a.startsWith('--source=')
         );
 
         if (files.length === 0) {
@@ -4022,24 +4044,40 @@ async function gitRestore(args) {
 
         for (const file of files) {
             if (hasStaged) {
-                // Unstage the file (like git reset <file>)
-                await git.resetIndex({ fs, dir, filepath: file });
+                // Unstage the file (like git reset <file>) or restore index from source
+                // If sourceRef is given, reset index to that (update index from HEAD/commit).
+                // Standard git restore --staged restores index from HEAD.
+                // git reset <file> also restores index from HEAD.
+                // If sourceRef is provided, we should use it.
+
+                let oid = 'HEAD';
+                if (sourceRef) oid = sourceRef;
+
+                // git.resetIndex usage?
+                // git.resetIndex({ fs, dir, filepath, ref }) 
+                // Checks ref (default HEAD).
+
+                await git.resetIndex({ fs, dir, filepath: file, ref: oid });
                 printNormal(`Unstaged changes for ${file}`);
             } else {
                 // Restore file from source (discard working tree changes)
+                // Default source is Index, unless --source is given.
                 try {
-                    const sourceOid = await git.resolveRef({ fs, dir, ref: source });
-                    const { blob } = await git.readBlob({
-                        fs,
-                        dir,
-                        oid: sourceOid,
-                        filepath: file
-                    });
+                    let blob;
+                    if (sourceRef) {
+                        const sourceOid = await git.resolveRef({ fs, dir, ref: sourceRef });
+                        const result = await git.readBlob({ fs, dir, oid: sourceOid, filepath: file });
+                        blob = result.blob;
+                    } else {
+                        // Read from Index
+                        const result = await git.readBlob({ fs, dir, filepath: file });
+                        blob = result.blob;
+                    }
 
                     const content = new TextDecoder().decode(blob);
                     const filepath = file.startsWith('/') ? file : `${dir}/${file}`;
                     await pfs.writeFile(filepath, content, 'utf8');
-                    printNormal(`Updated 1 path from ${source}`);
+                    printNormal(`Updated 1 path from ${sourceRef || 'the index'}`);
                 } catch (e) {
                     printError(`error: pathspec '${file}' did not match any file(s) known to git`);
                 }
