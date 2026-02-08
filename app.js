@@ -518,9 +518,36 @@ async function processPipedCommands(fullCommand) {
     }
 }
 
+// Helper to remove comments (handles quotes)
+function removeShellComments(cmd) {
+    let inQuote = false;
+    let quoteChar = '';
+
+    for (let i = 0; i < cmd.length; i++) {
+        const char = cmd[i];
+
+        if (inQuote) {
+            if (char === quoteChar) {
+                inQuote = false;
+            }
+        } else {
+            if (char === '"' || char === "'") {
+                inQuote = true;
+                quoteChar = char;
+            } else if (char === '#') {
+                // Comment starts if # is at start or preceded by whitespace
+                if (i === 0 || /\s/.test(cmd[i - 1])) {
+                    return cmd.substring(0, i);
+                }
+            }
+        }
+    }
+    return cmd;
+}
+
 // Command processor
 async function processCommand(cmd) {
-    const trimmedCmd = cmd.trim();
+    const trimmedCmd = removeShellComments(cmd).trim();
     if (!trimmedCmd) {
         showPrompt();
         return;
@@ -1451,6 +1478,8 @@ async function gitCommit(args) {
             author: { name: 'Student', email: 'student@example.com' },
             message
         });
+        // Small delay to ensure FS allows subsequent reads (fix for multi-line paste)
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         printNormal(`[${currentBranch} ${sha.substring(0, 7)}] ${message}`);
         printHint('Commit created! Use "git log" to see your commit history');
@@ -1631,13 +1660,34 @@ async function gitLog(args) {
                 ref: 'HEAD'
             });
         } catch (error) {
-            // Check for "Could not find refs/heads/..." which means empty repo
-            if (error.code === 'NotFoundError' || error.message.includes('Could not find') || error.message.includes('no such file')) {
-                printNormal('No commits yet');
-                printHint('Create your first commit with "git add <file>" and "git commit -m <message>"');
-                return;
+            let recovered = false;
+
+            // If error suggests missing object (but not missing ref), try depth: 1
+            if ((error.code === 'NotFoundError' || error.message.includes('Could not find') || error.message.includes('no such file')) &&
+                !error.message.includes('refs/')) {
+                try {
+                    commits = await git.log({
+                        fs,
+                        dir,
+                        depth: 1,
+                        ref: 'HEAD'
+                    });
+                    printHint('Note: Showing only latest commit (history incomplete).');
+                    recovered = true;
+                } catch (e2) {
+                    // Fallback failed, proceed to error handling
+                }
             }
-            throw error;
+
+            if (!recovered) {
+                // Check for "Could not find refs/heads/..." which means empty repo
+                if (error.code === 'NotFoundError' || error.message.includes('Could not find') || error.message.includes('no such file')) {
+                    printNormal(`No commits yet (Debug: ${error.message})`);
+                    printHint('Create your first commit with "git add <file>" and "git commit -m <message>"');
+                    return;
+                }
+                throw error;
+            }
         }
 
         if (commits.length === 0) {
@@ -2205,8 +2255,21 @@ async function gitCheckout(args) {
     } catch (error) {
         printError(`git checkout failed: ${error.message}`);
 
-        if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+        if (error.message?.includes('not found') || error.message?.includes('does not exist') || error.code === 'NotFoundError') {
             printHint('Make sure the branch exists. Use "git branch" to see all branches');
+
+            // Smart hint for main/master confusion
+            if (args.length > 0 && (args[0] === 'main' || args[0] === 'master')) {
+                try {
+                    const branches = await git.listBranches({ fs, dir: await git.findRoot({ fs, filepath: currentDir }) });
+                    const target = args[0];
+                    const alternative = target === 'main' ? 'master' : 'main';
+                    if (branches.includes(alternative) && !branches.includes(target)) {
+                        printHint(`Did you mean to checkout '${alternative}'?`);
+                    }
+                } catch (e) { }
+            }
+
             printHint('To create a new branch: git checkout -b <new-branch-name>');
         }
     }
@@ -4043,43 +4106,41 @@ async function gitRestore(args) {
         }
 
         for (const file of files) {
-            if (hasStaged) {
-                // Unstage the file (like git reset <file>) or restore index from source
-                // If sourceRef is given, reset index to that (update index from HEAD/commit).
-                // Standard git restore --staged restores index from HEAD.
-                // git reset <file> also restores index from HEAD.
-                // If sourceRef is provided, we should use it.
+            // Resolve path relative to repo root
+            const absPath = file.startsWith('/') ? file : `${currentDir}/${file}`;
+            // Handle case where currentDir might not end with slash, ensure slice works
+            let relPath = file;
+            if (absPath.startsWith(dir)) {
+                relPath = absPath.slice(dir.length);
+                if (relPath.startsWith('/')) relPath = relPath.slice(1);
+            }
 
+            if (hasStaged) {
+                // ... (existing staged logic, but uses file/relPath?)
+                // git.resetIndex uses filepath relative to dir
                 let oid = 'HEAD';
                 if (sourceRef) oid = sourceRef;
 
-                // git.resetIndex usage?
-                // git.resetIndex({ fs, dir, filepath, ref }) 
-                // Checks ref (default HEAD).
-
-                await git.resetIndex({ fs, dir, filepath: file, ref: oid });
-                printNormal(`Unstaged changes for ${file}`);
+                await git.resetIndex({ fs, dir, filepath: relPath, ref: oid });
+                printNormal(`Unstaged changes for ${relPath}`);
             } else {
-                // Restore file from source (discard working tree changes)
-                // Default source is Index, unless --source is given.
                 try {
                     let blob;
                     if (sourceRef) {
                         const sourceOid = await git.resolveRef({ fs, dir, ref: sourceRef });
-                        const result = await git.readBlob({ fs, dir, oid: sourceOid, filepath: file });
+                        const result = await git.readBlob({ fs, dir, oid: sourceOid, filepath: relPath });
                         blob = result.blob;
                     } else {
                         // Read from Index
-                        const result = await git.readBlob({ fs, dir, filepath: file });
+                        const result = await git.readBlob({ fs, dir, filepath: relPath });
                         blob = result.blob;
                     }
 
                     const content = new TextDecoder().decode(blob);
-                    const filepath = file.startsWith('/') ? file : `${dir}/${file}`;
-                    await pfs.writeFile(filepath, content, 'utf8');
+                    await pfs.writeFile(absPath, content, 'utf8');
                     printNormal(`Updated 1 path from ${sourceRef || 'the index'}`);
                 } catch (e) {
-                    printError(`error: pathspec '${file}' did not match any file(s) known to git`);
+                    printError(`error: pathspec '${relPath}' did not match any file(s) known to git (Debug: ${e.message})`);
                 }
             }
         }
@@ -5215,7 +5276,7 @@ function getLastArgument() {
 }
 
 // Terminal input handling
-term.onData(data => {
+async function handleTermInput(data) {
     const code = data.charCodeAt(0);
 
     // Ctrl+R - Reverse search
@@ -5273,7 +5334,7 @@ term.onData(data => {
         if (code === 13) { // Enter - accept current match
             exitReverseSearch(true);
             term.write('\r\n');
-            processCommand(currentLine);
+            await processCommand(currentLine);
             currentLine = '';
             cursorPos = 0;
             return;
@@ -5299,7 +5360,7 @@ term.onData(data => {
         if (code === 13) { // Enter - accept current match
             exitForwardSearch(true);
             term.write('\r\n');
-            processCommand(currentLine);
+            await processCommand(currentLine);
             currentLine = '';
             cursorPos = 0;
             return;
@@ -5505,7 +5566,7 @@ term.onData(data => {
     // Ctrl+J - Same as Enter (line feed)
     if (code === 10) {
         term.write('\r\n');
-        processCommand(currentLine);
+        await processCommand(currentLine);
         currentLine = '';
         cursorPos = 0;
         undoHistory = [];
@@ -5521,11 +5582,11 @@ term.onData(data => {
     // Handle special keys
     if (code === 13) { // Enter
         term.write('\r\n');
-        processCommand(currentLine);
+        await processCommand(currentLine);
         currentLine = '';
         cursorPos = 0;
     } else if (code === 9) { // Tab - autocomplete
-        handleTabCompletion();
+        await handleTabCompletion();
     } else if (code === 127) { // Backspace
         if (cursorPos > 0) {
             currentLine = currentLine.slice(0, cursorPos - 1) + currentLine.slice(cursorPos);
@@ -5691,6 +5752,23 @@ term.onData(data => {
         if (moveBack > 0) {
             term.write('\x1b[' + moveBack + 'D');
         }
+    }
+}
+
+term.onData(async (data) => {
+    // Handle special escape sequences as a single unit
+    if (data.length > 1 && data.charCodeAt(0) === 27) {
+        await handleTermInput(data);
+        return;
+    }
+
+    // Handle character by character (supports paste)
+    for (const char of data) {
+        // Normalize newlines to Enter?
+        // Original code handles \r (13) and \n (10).
+        // If I paste \n, char code is 10.
+        // handleTermInput handles code 10 correctly.
+        await handleTermInput(char);
     }
 });
 
