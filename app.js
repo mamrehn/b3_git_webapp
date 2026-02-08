@@ -103,6 +103,22 @@ let reverseSearchQuery = '';
 let reverseSearchIndex = -1;
 let savedLine = '';
 
+// Forward search state
+let forwardSearchMode = false;
+let forwardSearchQuery = '';
+let forwardSearchIndex = -1;
+
+// Kill ring (for Ctrl+Y yank)
+let killRing = [];
+const MAX_KILL_RING_SIZE = 10;
+
+// Undo history
+let undoHistory = [];
+const MAX_UNDO_HISTORY = 50;
+
+// Quoted insert mode (Ctrl+V)
+let quotedInsertMode = false;
+
 // Initialize the application
 async function init() {
     try {
@@ -3603,6 +3619,286 @@ function searchHistoryReverse() {
     updateReverseSearchPrompt(true);
 }
 
+// Word navigation helpers
+function findPreviousWordBoundary(line, pos) {
+    if (pos <= 0) return 0;
+    let i = pos - 1;
+    // Skip any trailing spaces
+    while (i > 0 && line[i] === ' ') i--;
+    // Skip the current word
+    while (i > 0 && line[i - 1] !== ' ') i--;
+    return i;
+}
+
+function findNextWordBoundary(line, pos) {
+    if (pos >= line.length) return line.length;
+    let i = pos;
+    // Skip current word
+    while (i < line.length && line[i] !== ' ') i++;
+    // Skip spaces
+    while (i < line.length && line[i] === ' ') i++;
+    return i;
+}
+
+// Redraw the current line from the start
+function redrawLine() {
+    term.write('\r\x1b[K');
+    showPromptInline();
+    term.write(currentLine);
+    // Move cursor to correct position
+    const moveBack = currentLine.length - cursorPos;
+    if (moveBack > 0) {
+        term.write('\x1b[' + moveBack + 'D');
+    }
+}
+
+// Kill ring helpers
+function pushToKillRing(text) {
+    if (text) {
+        killRing.push(text);
+        if (killRing.length > MAX_KILL_RING_SIZE) {
+            killRing.shift();
+        }
+    }
+}
+
+function yankFromKillRing() {
+    return killRing.length > 0 ? killRing[killRing.length - 1] : '';
+}
+
+// Undo helpers
+function saveUndoState() {
+    undoHistory.push({ line: currentLine, pos: cursorPos });
+    if (undoHistory.length > MAX_UNDO_HISTORY) {
+        undoHistory.shift();
+    }
+}
+
+function restoreUndoState() {
+    if (undoHistory.length > 0) {
+        const state = undoHistory.pop();
+        currentLine = state.line;
+        cursorPos = state.pos;
+        redrawLine();
+        return true;
+    }
+    return false;
+}
+
+// Forward search functions
+function startForwardSearch() {
+    if (commandHistory.length === 0) {
+        term.write('\r\x1b[K');
+        term.write('\x1b[31m(no history available)\x1b[0m');
+        setTimeout(() => {
+            term.write('\r\x1b[K');
+            showPromptInline();
+            term.write(currentLine);
+        }, 1000);
+        return;
+    }
+
+    forwardSearchMode = true;
+    forwardSearchQuery = '';
+    forwardSearchIndex = -1;
+    savedLine = currentLine;
+    currentLine = '';
+    cursorPos = 0;
+    updateForwardSearchPrompt();
+}
+
+function updateForwardSearchPrompt(failed = false) {
+    term.write('\r\x1b[K');
+    if (failed) {
+        term.write(`\x1b[31m(failed i-search)\`${forwardSearchQuery}': \x1b[0m${currentLine}`);
+    } else {
+        term.write(`\x1b[33m(i-search)\`${forwardSearchQuery}': \x1b[0m${currentLine}`);
+    }
+}
+
+function exitForwardSearch(accept = true) {
+    forwardSearchMode = false;
+    if (!accept) {
+        currentLine = savedLine;
+        cursorPos = savedLine.length;
+    } else {
+        cursorPos = currentLine.length;
+    }
+    term.write('\r\x1b[K');
+    showPromptInline();
+    term.write(currentLine);
+}
+
+function searchHistoryForward() {
+    // Empty query - show next command (or previous on subsequent Ctrl+S presses)
+    if (forwardSearchQuery === '') {
+        if (forwardSearchIndex < commandHistory.length - 1) {
+            forwardSearchIndex++;
+            currentLine = commandHistory[forwardSearchIndex];
+            updateForwardSearchPrompt(false);
+        } else {
+            // Already at the end
+            forwardSearchIndex = commandHistory.length - 1;
+            if (commandHistory.length > 0) {
+                currentLine = commandHistory[forwardSearchIndex];
+            }
+            updateForwardSearchPrompt(false);
+        }
+        return;
+    }
+
+    // Search forwards through history with query
+    for (let i = forwardSearchIndex + 1; i < commandHistory.length; i++) {
+        if (commandHistory[i].toLowerCase().includes(forwardSearchQuery.toLowerCase())) {
+            forwardSearchIndex = i;
+            currentLine = commandHistory[i];
+            updateForwardSearchPrompt(false);
+            return;
+        }
+    }
+
+    // Wrap around to beginning
+    for (let i = 0; i < forwardSearchIndex; i++) {
+        if (commandHistory[i].toLowerCase().includes(forwardSearchQuery.toLowerCase())) {
+            forwardSearchIndex = i;
+            currentLine = commandHistory[i];
+            updateForwardSearchPrompt(false);
+            return;
+        }
+    }
+
+    // No match found
+    currentLine = '';
+    updateForwardSearchPrompt(true);
+}
+
+// Word case manipulation helpers
+function findWordEnd(line, pos) {
+    let i = pos;
+    // Skip to start of word if in whitespace
+    while (i < line.length && line[i] === ' ') i++;
+    // Find end of word
+    while (i < line.length && line[i] !== ' ') i++;
+    return i;
+}
+
+function uppercaseWord() {
+    if (cursorPos >= currentLine.length) return;
+    saveUndoState();
+    const wordEnd = findWordEnd(currentLine, cursorPos);
+    const before = currentLine.slice(0, cursorPos);
+    const word = currentLine.slice(cursorPos, wordEnd).toUpperCase();
+    const after = currentLine.slice(wordEnd);
+    currentLine = before + word + after;
+    cursorPos = wordEnd;
+    redrawLine();
+}
+
+function lowercaseWord() {
+    if (cursorPos >= currentLine.length) return;
+    saveUndoState();
+    const wordEnd = findWordEnd(currentLine, cursorPos);
+    const before = currentLine.slice(0, cursorPos);
+    const word = currentLine.slice(cursorPos, wordEnd).toLowerCase();
+    const after = currentLine.slice(wordEnd);
+    currentLine = before + word + after;
+    cursorPos = wordEnd;
+    redrawLine();
+}
+
+function capitalizeWord() {
+    if (cursorPos >= currentLine.length) return;
+    saveUndoState();
+    let i = cursorPos;
+    // Skip whitespace
+    while (i < currentLine.length && currentLine[i] === ' ') i++;
+    if (i >= currentLine.length) return;
+
+    const wordEnd = findWordEnd(currentLine, i);
+    const before = currentLine.slice(0, i);
+    const firstChar = currentLine[i].toUpperCase();
+    const rest = currentLine.slice(i + 1, wordEnd).toLowerCase();
+    const after = currentLine.slice(wordEnd);
+    currentLine = before + firstChar + rest + after;
+    cursorPos = wordEnd;
+    redrawLine();
+}
+
+// Transpose characters
+function transposeChars() {
+    if (currentLine.length < 2) return;
+    saveUndoState();
+
+    let pos = cursorPos;
+    // If at end of line, swap the last two characters
+    if (pos >= currentLine.length) {
+        pos = currentLine.length;
+    }
+    // If at beginning, can't transpose
+    if (pos < 1) return;
+
+    // If at position 1 or greater but not at end, swap char before cursor with char at cursor
+    // If at end, swap the two chars before cursor
+    let swapPos = pos;
+    if (pos >= currentLine.length) {
+        swapPos = pos - 1;
+    }
+
+    const before = currentLine.slice(0, swapPos - 1);
+    const char1 = currentLine[swapPos - 1];
+    const char2 = currentLine[swapPos] || '';
+    const after = currentLine.slice(swapPos + 1);
+
+    if (char2) {
+        currentLine = before + char2 + char1 + after;
+        cursorPos = swapPos + 1;
+    } else {
+        // At end, swap last two
+        currentLine = before + char1;
+        cursorPos = pos;
+    }
+    redrawLine();
+}
+
+// Transpose words
+function transposeWords() {
+    if (cursorPos === 0 || currentLine.trim().split(/\s+/).length < 2) return;
+    saveUndoState();
+
+    // Find the current word boundaries
+    let wordStart = cursorPos;
+    let wordEnd = cursorPos;
+
+    // Go back to find current word start
+    while (wordStart > 0 && currentLine[wordStart - 1] !== ' ') wordStart--;
+    // Go forward to find current word end
+    while (wordEnd < currentLine.length && currentLine[wordEnd] !== ' ') wordEnd++;
+
+    // Find previous word
+    let prevEnd = wordStart;
+    while (prevEnd > 0 && currentLine[prevEnd - 1] === ' ') prevEnd--;
+    let prevStart = prevEnd;
+    while (prevStart > 0 && currentLine[prevStart - 1] !== ' ') prevStart--;
+
+    if (prevEnd === 0) return; // No previous word
+
+    const word1 = currentLine.slice(prevStart, prevEnd);
+    const separator = currentLine.slice(prevEnd, wordStart);
+    const word2 = currentLine.slice(wordStart, wordEnd);
+
+    currentLine = currentLine.slice(0, prevStart) + word2 + separator + word1 + currentLine.slice(wordEnd);
+    cursorPos = prevStart + word2.length + separator.length + word1.length;
+    redrawLine();
+}
+
+// Get last argument from previous command
+function getLastArgument() {
+    if (commandHistory.length === 0) return '';
+    const lastCmd = commandHistory[commandHistory.length - 1];
+    const parts = lastCmd.trim().split(/\s+/);
+    return parts.length > 0 ? parts[parts.length - 1] : '';
+}
+
 // Terminal input handling
 term.onData(data => {
     const code = data.charCodeAt(0);
@@ -3611,15 +3907,49 @@ term.onData(data => {
     if (code === 18) { // Ctrl+R
         if (reverseSearchMode) {
             searchHistoryReverse();
+        } else if (forwardSearchMode) {
+            // Switch from forward to reverse search
+            exitForwardSearch(false);
+            startReverseSearch();
         } else {
             startReverseSearch();
         }
         return;
     }
 
-    // Ctrl+C or Escape - Exit reverse search
-    if ((code === 3 || code === 27) && reverseSearchMode) {
-        exitReverseSearch(false);
+    // Ctrl+S - Forward search
+    if (code === 19) { // Ctrl+S
+        if (forwardSearchMode) {
+            searchHistoryForward();
+        } else if (reverseSearchMode) {
+            // Switch from reverse to forward search
+            exitReverseSearch(false);
+            startForwardSearch();
+        } else {
+            startForwardSearch();
+        }
+        return;
+    }
+
+    // Ctrl+G - Abort (cancel current operation)
+    if (code === 7) { // Ctrl+G
+        if (reverseSearchMode) {
+            exitReverseSearch(false);
+        } else if (forwardSearchMode) {
+            exitForwardSearch(false);
+        } else {
+            term.write('^G\r\n');
+            currentLine = '';
+            cursorPos = 0;
+            showPrompt();
+        }
+        return;
+    }
+
+    // Ctrl+C or Escape - Exit search modes
+    if ((code === 3 || code === 27) && (reverseSearchMode || forwardSearchMode)) {
+        if (reverseSearchMode) exitReverseSearch(false);
+        if (forwardSearchMode) exitForwardSearch(false);
         return;
     }
 
@@ -3649,6 +3979,230 @@ term.onData(data => {
         return;
     }
 
+    // Handle forward search mode
+    if (forwardSearchMode) {
+        if (code === 13) { // Enter - accept current match
+            exitForwardSearch(true);
+            term.write('\r\n');
+            processCommand(currentLine);
+            currentLine = '';
+            cursorPos = 0;
+            return;
+        } else if (code === 127) { // Backspace in search
+            if (forwardSearchQuery.length > 0) {
+                forwardSearchQuery = forwardSearchQuery.slice(0, -1);
+                forwardSearchIndex = -1;
+                currentLine = '';
+                searchHistoryForward();
+            }
+            return;
+        } else if (code >= 32 && code <= 126) { // Add to search query
+            forwardSearchQuery += data;
+            forwardSearchIndex = -1;
+            searchHistoryForward();
+            return;
+        }
+        return;
+    }
+
+    // Handle quoted insert mode (Ctrl+V)
+    if (quotedInsertMode) {
+        quotedInsertMode = false;
+        saveUndoState();
+        // Insert the character literally, including control characters
+        currentLine = currentLine.slice(0, cursorPos) + data + currentLine.slice(cursorPos);
+        cursorPos++;
+        redrawLine();
+        return;
+    }
+
+    // Handle Ctrl key combinations (codes 1-26 correspond to Ctrl+A through Ctrl+Z)
+    // Ctrl+A - Move to beginning of line
+    if (code === 1) {
+        if (cursorPos > 0) {
+            cursorPos = 0;
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+E - Move to end of line
+    if (code === 5) {
+        if (cursorPos < currentLine.length) {
+            cursorPos = currentLine.length;
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+K - Kill (delete) from cursor to end of line
+    if (code === 11) {
+        if (cursorPos < currentLine.length) {
+            saveUndoState();
+            const killed = currentLine.slice(cursorPos);
+            pushToKillRing(killed);
+            currentLine = currentLine.slice(0, cursorPos);
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+U - Kill (delete) from cursor to beginning of line
+    if (code === 21) {
+        if (cursorPos > 0) {
+            saveUndoState();
+            const killed = currentLine.slice(0, cursorPos);
+            pushToKillRing(killed);
+            currentLine = currentLine.slice(cursorPos);
+            cursorPos = 0;
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+W - Delete previous word
+    if (code === 23) {
+        if (cursorPos > 0) {
+            saveUndoState();
+            const newPos = findPreviousWordBoundary(currentLine, cursorPos);
+            const killed = currentLine.slice(newPos, cursorPos);
+            pushToKillRing(killed);
+            currentLine = currentLine.slice(0, newPos) + currentLine.slice(cursorPos);
+            cursorPos = newPos;
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+L - Clear screen
+    if (code === 12) {
+        term.clear();
+        showPromptInline();
+        term.write(currentLine);
+        const moveBack = currentLine.length - cursorPos;
+        if (moveBack > 0) {
+            term.write('\x1b[' + moveBack + 'D');
+        }
+        return;
+    }
+
+    // Ctrl+C - Cancel current line (when not in reverse search mode)
+    if (code === 3) {
+        term.write('^C\r\n');
+        currentLine = '';
+        cursorPos = 0;
+        historyIndex = commandHistory.length;
+        showPrompt();
+        return;
+    }
+
+    // Ctrl+D - Delete character under cursor (or exit if line is empty)
+    if (code === 4) {
+        if (currentLine.length === 0) {
+            // Could handle "exit" here, but for now just ignore
+            return;
+        }
+        if (cursorPos < currentLine.length) {
+            currentLine = currentLine.slice(0, cursorPos) + currentLine.slice(cursorPos + 1);
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+B - Move cursor back (like left arrow)
+    if (code === 2) {
+        if (cursorPos > 0) {
+            cursorPos--;
+            term.write('\x1b[D');
+        }
+        return;
+    }
+
+    // Ctrl+F - Move cursor forward (like right arrow)
+    if (code === 6) {
+        if (cursorPos < currentLine.length) {
+            cursorPos++;
+            term.write('\x1b[C');
+        }
+        return;
+    }
+
+    // Ctrl+P - Previous history (like up arrow)
+    if (code === 16) {
+        if (historyIndex > 0) {
+            historyIndex--;
+            currentLine = commandHistory[historyIndex] || '';
+            cursorPos = currentLine.length;
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+N - Next history (like down arrow)
+    if (code === 14) {
+        if (historyIndex < commandHistory.length - 1) {
+            historyIndex++;
+            currentLine = commandHistory[historyIndex] || '';
+        } else {
+            historyIndex = commandHistory.length;
+            currentLine = '';
+        }
+        cursorPos = currentLine.length;
+        redrawLine();
+        return;
+    }
+
+    // Ctrl+T - Transpose characters
+    if (code === 20) {
+        transposeChars();
+        return;
+    }
+
+    // Ctrl+Y - Yank (paste) from kill ring
+    if (code === 25) {
+        const yanked = yankFromKillRing();
+        if (yanked) {
+            saveUndoState();
+            currentLine = currentLine.slice(0, cursorPos) + yanked + currentLine.slice(cursorPos);
+            cursorPos += yanked.length;
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+_ or Ctrl+/ - Undo
+    if (code === 31) {
+        restoreUndoState();
+        return;
+    }
+
+    // Ctrl+H - Same as backspace
+    if (code === 8) {
+        if (cursorPos > 0) {
+            saveUndoState();
+            currentLine = currentLine.slice(0, cursorPos - 1) + currentLine.slice(cursorPos);
+            cursorPos--;
+            redrawLine();
+        }
+        return;
+    }
+
+    // Ctrl+J - Same as Enter (line feed)
+    if (code === 10) {
+        term.write('\r\n');
+        processCommand(currentLine);
+        currentLine = '';
+        cursorPos = 0;
+        undoHistory = [];
+        return;
+    }
+
+    // Ctrl+V - Quoted insert (insert next char literally)
+    if (code === 22) {
+        quotedInsertMode = true;
+        return;
+    }
+
     // Handle special keys
     if (code === 13) { // Enter
         term.write('\r\n');
@@ -3669,42 +4223,147 @@ term.onData(data => {
                 term.write('\x1b[' + moveBack + 'D');
             }
         }
-    } else if (code === 27) { // Escape sequences (arrow keys)
-        if (data === '\x1b[A') { // Up arrow
+    } else if (code === 27) { // Escape sequences (arrow keys, special keys)
+        // Up arrow
+        if (data === '\x1b[A') {
             if (historyIndex > 0) {
                 historyIndex--;
-                // Clear current line
-                term.write('\r\x1b[K');
-                showPromptInline();
                 currentLine = commandHistory[historyIndex] || '';
                 cursorPos = currentLine.length;
-                term.write(currentLine);
+                redrawLine();
             }
-        } else if (data === '\x1b[B') { // Down arrow
+            // Down arrow
+        } else if (data === '\x1b[B') {
             if (historyIndex < commandHistory.length - 1) {
                 historyIndex++;
-                term.write('\r\x1b[K');
-                showPromptInline();
                 currentLine = commandHistory[historyIndex] || '';
-                cursorPos = currentLine.length;
-                term.write(currentLine);
             } else {
                 historyIndex = commandHistory.length;
-                term.write('\r\x1b[K');
-                showPromptInline();
                 currentLine = '';
-                cursorPos = 0;
             }
-        } else if (data === '\x1b[C') { // Right arrow
+            cursorPos = currentLine.length;
+            redrawLine();
+            // Right arrow
+        } else if (data === '\x1b[C') {
             if (cursorPos < currentLine.length) {
                 cursorPos++;
-                term.write('\x1b[C'); // Move cursor right
+                term.write('\x1b[C');
             }
-        } else if (data === '\x1b[D') { // Left arrow
+            // Left arrow
+        } else if (data === '\x1b[D') {
             if (cursorPos > 0) {
                 cursorPos--;
-                term.write('\x1b[D'); // Move cursor left
+                term.write('\x1b[D');
             }
+            // Ctrl+Right arrow - move to next word
+        } else if (data === '\x1b[1;5C') {
+            const newPos = findNextWordBoundary(currentLine, cursorPos);
+            if (newPos !== cursorPos) {
+                cursorPos = newPos;
+                redrawLine();
+            }
+            // Ctrl+Left arrow - move to previous word
+        } else if (data === '\x1b[1;5D') {
+            const newPos = findPreviousWordBoundary(currentLine, cursorPos);
+            if (newPos !== cursorPos) {
+                cursorPos = newPos;
+                redrawLine();
+            }
+            // Alt+Right arrow (alternative word navigation)
+        } else if (data === '\x1b[1;3C' || data === '\x1bf') {
+            const newPos = findNextWordBoundary(currentLine, cursorPos);
+            if (newPos !== cursorPos) {
+                cursorPos = newPos;
+                redrawLine();
+            }
+            // Alt+Left arrow (alternative word navigation)
+        } else if (data === '\x1b[1;3D' || data === '\x1bb') {
+            const newPos = findPreviousWordBoundary(currentLine, cursorPos);
+            if (newPos !== cursorPos) {
+                cursorPos = newPos;
+                redrawLine();
+            }
+            // Home key
+        } else if (data === '\x1b[H' || data === '\x1bOH' || data === '\x1b[1~') {
+            if (cursorPos > 0) {
+                cursorPos = 0;
+                redrawLine();
+            }
+            // End key
+        } else if (data === '\x1b[F' || data === '\x1bOF' || data === '\x1b[4~') {
+            if (cursorPos < currentLine.length) {
+                cursorPos = currentLine.length;
+                redrawLine();
+            }
+            // Delete key
+        } else if (data === '\x1b[3~') {
+            if (cursorPos < currentLine.length) {
+                currentLine = currentLine.slice(0, cursorPos) + currentLine.slice(cursorPos + 1);
+                redrawLine();
+            }
+            // Ctrl+Delete - delete word forward
+        } else if (data === '\x1b[3;5~') {
+            if (cursorPos < currentLine.length) {
+                const endPos = findNextWordBoundary(currentLine, cursorPos);
+                currentLine = currentLine.slice(0, cursorPos) + currentLine.slice(endPos);
+                redrawLine();
+            }
+            // Alt+D - delete word forward (readline style)
+        } else if (data === '\x1bd') {
+            if (cursorPos < currentLine.length) {
+                saveUndoState();
+                const endPos = findNextWordBoundary(currentLine, cursorPos);
+                const killed = currentLine.slice(cursorPos, endPos);
+                pushToKillRing(killed);
+                currentLine = currentLine.slice(0, cursorPos) + currentLine.slice(endPos);
+                redrawLine();
+            }
+            // Alt+Backspace - delete word backward
+        } else if (data === '\x1b\x7f') {
+            if (cursorPos > 0) {
+                saveUndoState();
+                const newPos = findPreviousWordBoundary(currentLine, cursorPos);
+                const killed = currentLine.slice(newPos, cursorPos);
+                pushToKillRing(killed);
+                currentLine = currentLine.slice(0, newPos) + currentLine.slice(cursorPos);
+                cursorPos = newPos;
+                redrawLine();
+            }
+            // Alt+U - Uppercase word
+        } else if (data === '\x1bu') {
+            uppercaseWord();
+            // Alt+L - Lowercase word
+        } else if (data === '\x1bl') {
+            lowercaseWord();
+            // Alt+C - Capitalize word
+        } else if (data === '\x1bc') {
+            capitalizeWord();
+            // Alt+T - Transpose words
+        } else if (data === '\x1bt') {
+            transposeWords();
+            // Alt+. or Alt+_ - Insert last argument from previous command
+        } else if (data === '\x1b.' || data === '\x1b_') {
+            const lastArg = getLastArgument();
+            if (lastArg) {
+                saveUndoState();
+                currentLine = currentLine.slice(0, cursorPos) + lastArg + currentLine.slice(cursorPos);
+                cursorPos += lastArg.length;
+                redrawLine();
+            }
+            // Alt+< - Go to beginning of history
+        } else if (data === '\x1b<') {
+            if (commandHistory.length > 0) {
+                historyIndex = 0;
+                currentLine = commandHistory[0];
+                cursorPos = currentLine.length;
+                redrawLine();
+            }
+            // Alt+> - Go to end of history (current line)
+        } else if (data === '\x1b>') {
+            historyIndex = commandHistory.length;
+            currentLine = '';
+            cursorPos = 0;
+            redrawLine();
         }
     } else if (code >= 32 && code <= 126) { // Printable characters
         currentLine = currentLine.slice(0, cursorPos) + data + currentLine.slice(cursorPos);
