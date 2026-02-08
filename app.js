@@ -4105,6 +4105,8 @@ async function gitRestore(args) {
             return;
         }
 
+        let hasErrors = false;
+
         for (const file of files) {
             // Resolve path relative to repo root
             const absPath = file.startsWith('/') ? file : `${currentDir}/${file}`;
@@ -4116,7 +4118,6 @@ async function gitRestore(args) {
             }
 
             if (hasStaged) {
-                // ... (existing staged logic, but uses file/relPath?)
                 // git.resetIndex uses filepath relative to dir
                 let oid = 'HEAD';
                 if (sourceRef) oid = sourceRef;
@@ -4126,28 +4127,24 @@ async function gitRestore(args) {
             } else {
                 try {
                     let blob;
-                    if (sourceRef) {
-                        const sourceOid = await git.resolveRef({ fs, dir, ref: sourceRef });
-                        const result = await git.readBlob({ fs, dir, oid: sourceOid, filepath: relPath });
-                        blob = result.blob;
-                    } else {
-                        // Read from Index
-                        const result = await git.readBlob({ fs, dir, filepath: relPath });
-                        blob = result.blob;
-                    }
+                    const ref = sourceRef || 'HEAD';
+                    const resolvedOid = await git.resolveRef({ fs, dir, ref });
+                    const result = await git.readBlob({ fs, dir, oid: resolvedOid, filepath: relPath });
+                    blob = result.blob;
 
                     const content = new TextDecoder().decode(blob);
                     await pfs.writeFile(absPath, content, 'utf8');
                     printNormal(`Updated 1 path from ${sourceRef || 'the index'}`);
                 } catch (e) {
-                    printError(`error: pathspec '${relPath}' did not match any file(s) known to git (Debug: ${e.message})`);
+                    hasErrors = true;
+                    printError(`error: pathspec '${relPath}' did not match any file(s) known to git`);
                 }
             }
         }
 
         if (hasStaged) {
             printHint('Files have been unstaged. Use "git add" to stage again.');
-        } else {
+        } else if (!hasErrors) {
             printHint('Working tree changes have been discarded');
         }
     } catch (error) {
