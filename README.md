@@ -29,35 +29,46 @@ An interactive web-based terminal application for learning Git commands in a saf
 **Repository Setup & Configuration**
 - `git init` - Initialize a repository
 - `git config` - Get and set configuration options
+- `git remote` - Manage remotes (add, remove, rename, set-url)
 
 **Basic Snapshotting**
 - `git status` - Show working tree status
 - `git add` - Stage files
-- `git commit` - Commit changes
-- `git diff` - Show changes
-- `git reset` - Unstage files
+- `git commit` - Commit changes (support `-m`, `--amend`)
+- `git restore` - Restore working tree files
+- `git reset` - Reset current HEAD (`--soft`, `--mixed`, `--hard`)
 - `git rm` - Remove files from working tree and index
 - `git mv` - Move or rename files
+- `git clean` - Remove untracked files
 
 **Branching & Merging**
 - `git branch` - List/create branches
-- `git checkout` - Switch branches
+- `git checkout` - Switch branches or restore files
+- `git switch` - Switch branches (modern)
 - `git merge` - Merge branches
+- `git rebase` - Reapply commits on top of another base tip
 
 **Inspecting & Comparing**
 - `git log` - View commit history
-- `git show` - Show commit details
-- `git tag` - Create or list tags
+- `git show` - Show commit details and diffs
+- `git diff` - Show changes
+- `git tag` - Create, list, delete tags
+- `git blame` - Show what revision and author last modified each line
+- `git reflog` - Manage reflog information
+- `git shortlog` - Summarize git log output
 
 **Sharing & Updating**
-- `git remote` - Manage remotes (simulated)
-- `git fetch` - Download objects from remote (simulated)
-- `git push` - Push to remote (simulated)
-- `git pull` - Pull from remote (simulated)
-- `git clone` - Clone repository (simulated)
+- `git fetch` - Download objects from remote
+- `git push` - Push to remote
+- `git pull` - Pull from remote
+- `git clone` - Clone repository
+
+**Patching**
+- `git cherry-pick` - Apply changes from a specific commit
+- `git revert` - Create a new commit that undoes a commit
 
 **Temporary Commits**
-- `git stash` - Stash changes (simulated)
+- `git stash` - Stash changes (push, pop, apply, list, show, drop, clear)
 
 ### 🎨 Learning Features
 - **Color-Coded Output**:
