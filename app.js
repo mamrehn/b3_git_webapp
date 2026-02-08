@@ -96,6 +96,7 @@ let editorOriginalContent = '';
 let codeMirrorInstance = null;
 let isCommitMessageMode = false;
 let commitMessageDir = null;
+let commitMessageIsAmend = false;
 
 // Reverse search state
 let reverseSearchMode = false;
@@ -111,6 +112,19 @@ let forwardSearchIndex = -1;
 // Kill ring (for Ctrl+Y yank)
 let killRing = [];
 const MAX_KILL_RING_SIZE = 10;
+
+// Environment variables
+const envVars = {
+    HOME: '/home/student',
+    USER: 'student',
+    SHELL: '/bin/bash',
+    PWD: '/home/student',
+    TERM: 'xterm-256color',
+    LANG: 'en_US.UTF-8',
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    HOSTNAME: 'git-learning-terminal',
+    EDITOR: 'vi'
+};
 
 // Undo history
 let undoHistory = [];
@@ -406,6 +420,34 @@ function showPromptInline() {
 }
 
 // Helper functions
+
+// Get configured author from git config (falls back to defaults)
+async function getAuthor(dir) {
+    try {
+        const name = await git.getConfig({ fs, dir, path: 'user.name' }) || DEFAULT_USER.name;
+        const email = await git.getConfig({ fs, dir, path: 'user.email' }) || DEFAULT_USER.email;
+        return { name, email };
+    } catch (e) {
+        return { ...DEFAULT_USER };
+    }
+}
+
+function formatLsDate(date) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const mon = months[date.getMonth()];
+    const day = String(date.getDate()).padStart(2, ' ');
+    const now = new Date();
+    // If within the last 6 months, show time; otherwise show year
+    const sixMonths = 180 * 24 * 60 * 60 * 1000;
+    if (now - date < sixMonths) {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const mins = String(date.getMinutes()).padStart(2, '0');
+        return `${mon} ${day} ${hours}:${mins}`;
+    } else {
+        return `${mon} ${day}  ${date.getFullYear()}`;
+    }
+}
+
 function resolvePath(path) {
     let resolvedPath;
 
@@ -451,6 +493,22 @@ async function removeDirectory(dirPath) {
     await fs.promises.rmdir(dirPath);
 }
 
+// Recursively flatten a git tree into { filepath: blobOid } map
+async function flattenTree(dir, treeOid, prefix = '') {
+    const result = {};
+    const { tree } = await git.readTree({ fs, dir, oid: treeOid });
+    for (const entry of tree) {
+        const fullPath = prefix ? `${prefix}/${entry.path}` : entry.path;
+        if (entry.type === 'blob') {
+            result[fullPath] = entry.oid;
+        } else if (entry.type === 'tree') {
+            const subFiles = await flattenTree(dir, entry.oid, fullPath);
+            Object.assign(result, subFiles);
+        }
+    }
+    return result;
+}
+
 function printNormal(text) {
     term.writeln(`\r\n${text}`);
 }
@@ -471,21 +529,95 @@ async function processPipedCommands(fullCommand) {
         const commands = fullCommand.split('|').map(c => c.trim());
         let output = '';
 
-        // Execute first command and capture output
-        const firstCmd = commands[0];
-        const parts = firstCmd.split(/\s+/);
-        const command = parts[0];
-        const args = parts.slice(1);
+        // Capture output from first command by temporarily intercepting term.writeln
+        const originalWriteln = term.writeln.bind(term);
+        const originalWrite = term.write.bind(term);
+        let capturedLines = [];
+        let capturing = false;
 
-        // Capture output from first command
-        if (command === 'history') {
-            output = commandHistory.map((cmd, i) => `${i + 1}  ${cmd}`).join('\n');
-        } else {
-            printError('Pipe only supported with history command currently');
-            return;
+        function startCapture() {
+            capturing = true;
+            capturedLines = [];
+            term.writeln = (text) => {
+                // Strip \r\n prefix and ANSI codes for piping
+                const clean = text.replace(/^\r?\n/, '');
+                if (clean !== '') capturedLines.push(clean);
+            };
+            term.write = (text) => {
+                const clean = text.replace(/^\r?\n/, '');
+                if (clean !== '') capturedLines.push(clean);
+            };
         }
 
-        // Process remaining commands in pipe
+        function stopCapture() {
+            capturing = false;
+            term.writeln = originalWriteln;
+            term.write = originalWrite;
+            return capturedLines.join('\n');
+        }
+
+        // Execute first command and capture output
+        const firstCmd = commands[0];
+        const firstParts = firstCmd.split(/\s+/);
+        const firstCommand = firstParts[0];
+        const firstArgs = firstParts.slice(1);
+
+        // Special handling for commands that produce output
+        startCapture();
+        try {
+            if (firstCommand === 'history') {
+                output = commandHistory.map((cmd, i) => `${i + 1}  ${cmd}`).join('\n');
+            } else if (firstCommand === 'cat') {
+                for (const file of firstArgs) {
+                    try {
+                        const content = await pfs.readFile(resolvePath(file), 'utf8');
+                        output += content;
+                    } catch (e) { }
+                }
+            } else if (firstCommand === 'echo') {
+                output = processEchoText(firstCmd.replace(/^echo\s*/, ''));
+            } else if (firstCommand === 'ls') {
+                const targetDir = firstArgs.length > 0 && !firstArgs[0].startsWith('-') ? resolvePath(firstArgs[0]) : currentDir;
+                const showHidden = firstArgs.some(a => a.includes('a'));
+                try {
+                    const files = await pfs.readdir(targetDir);
+                    const filtered = showHidden ? files : files.filter(f => !f.startsWith('.'));
+                    output = filtered.join('\n');
+                } catch (e) { }
+            } else if (firstCommand === 'git') {
+                // Run git command and capture its output
+                await cmdGit(firstArgs);
+                output = stopCapture();
+                startCapture();
+            } else if (firstCommand === 'find') {
+                await cmdFind(firstArgs);
+                output = stopCapture();
+                startCapture();
+            } else {
+                // Try running the command generically
+                const genericRunner = {
+                    'head': () => cmdHead(firstArgs),
+                    'tail': () => cmdTail(firstArgs),
+                    'grep': () => cmdGrep(firstArgs),
+                    'wc': () => cmdWc(firstArgs),
+                    'env': () => cmdEnv(),
+                    'printenv': () => cmdEnv(),
+                };
+                if (genericRunner[firstCommand]) {
+                    await genericRunner[firstCommand]();
+                    output = stopCapture();
+                    startCapture();
+                } else {
+                    stopCapture();
+                    printError(`Pipe not supported for: ${firstCommand}`);
+                    return;
+                }
+            }
+        } finally {
+            stopCapture();
+        }
+
+        // Process remaining commands in the pipe
         for (let i = 1; i < commands.length; i++) {
             const pipeCmd = commands[i];
             const pipeParts = pipeCmd.split(/\s+/);
@@ -497,9 +629,58 @@ async function processPipedCommands(fullCommand) {
                     printError('grep: missing search pattern');
                     return;
                 }
-                const pattern = pipeArgs[0].replace(/^["']|["']$/g, '');
+                const ignoreCase = pipeArgs.includes('-i');
+                const invertMatch = pipeArgs.includes('-v');
+                const countOnly = pipeArgs.includes('-c');
+                const pattern = pipeArgs.filter(a => !a.startsWith('-'))[0]?.replace(/^["']|["']$/g, '');
+                if (!pattern) { printError('grep: missing pattern'); return; }
+                let regex;
+                try { regex = new RegExp(pattern, ignoreCase ? 'i' : ''); } catch (e) { regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
                 const lines = output.split('\n');
-                output = lines.filter(line => line.toLowerCase().includes(pattern.toLowerCase())).join('\n');
+                const filtered = lines.filter(line => {
+                    // Strip ANSI codes for matching
+                    const clean = line.replace(/\x1b\[[0-9;]*m/g, '');
+                    return regex.test(clean) !== invertMatch;
+                });
+                if (countOnly) {
+                    output = String(filtered.length);
+                } else {
+                    output = filtered.join('\n');
+                }
+            } else if (pipeCommand === 'head') {
+                let n = 10;
+                if (pipeArgs[0] === '-n' && pipeArgs[1]) n = parseInt(pipeArgs[1], 10);
+                else if (pipeArgs[0]?.startsWith('-')) n = parseInt(pipeArgs[0].slice(1), 10);
+                output = output.split('\n').slice(0, n).join('\n');
+            } else if (pipeCommand === 'tail') {
+                let n = 10;
+                if (pipeArgs[0] === '-n' && pipeArgs[1]) n = parseInt(pipeArgs[1], 10);
+                else if (pipeArgs[0]?.startsWith('-')) n = parseInt(pipeArgs[0].slice(1), 10);
+                output = output.split('\n').slice(-n).join('\n');
+            } else if (pipeCommand === 'wc') {
+                const showL = pipeArgs.includes('-l') || pipeArgs.length === 0;
+                const showW = pipeArgs.includes('-w') || pipeArgs.length === 0;
+                const lines = output.split('\n');
+                const words = output.split(/\s+/).filter(w => w).length;
+                let result = '';
+                if (showL) result += String(lines.length).padStart(8);
+                if (showW) result += String(words).padStart(8);
+                output = result;
+            } else if (pipeCommand === 'sort') {
+                const lines = output.split('\n');
+                const reverse = pipeArgs.includes('-r');
+                const numeric = pipeArgs.includes('-n');
+                lines.sort((a, b) => {
+                    if (numeric) return parseFloat(a) - parseFloat(b);
+                    return a.localeCompare(b);
+                });
+                if (reverse) lines.reverse();
+                output = lines.join('\n');
+            } else if (pipeCommand === 'uniq') {
+                const lines = output.split('\n');
+                output = lines.filter((line, i) => i === 0 || line !== lines[i - 1]).join('\n');
+            } else if (pipeCommand === 'cat') {
+                // cat with no args in pipe = passthrough (no-op)
             } else {
                 printError(`Pipe command not supported: ${pipeCommand}`);
                 return;
@@ -510,8 +691,6 @@ async function processPipedCommands(fullCommand) {
         if (output) {
             printNormal('');
             output.split('\n').forEach(line => term.writeln(line));
-        } else {
-            printNormal('(no matches)');
         }
     } catch (error) {
         printError(`Pipe error: ${error.message}`);
@@ -547,25 +726,43 @@ function removeShellComments(cmd) {
 
 // Command processor
 async function processCommand(cmd) {
-    const trimmedCmd = removeShellComments(cmd).trim();
+    let trimmedCmd = removeShellComments(cmd).trim();
     if (!trimmedCmd) {
         showPrompt();
         return;
     }
 
+    // Expand environment variables ($VAR, ${VAR})
+    trimmedCmd = expandEnvVars(trimmedCmd);
+
     // Add to history
     commandHistory.push(trimmedCmd);
     historyIndex = commandHistory.length;
 
-    // Handle && chaining (split and run sequentially, stop on failure)
-    if (trimmedCmd.includes('&&')) {
-        const chainedCmds = trimmedCmd.split('&&').map(c => c.trim()).filter(c => c);
-        for (const subcmd of chainedCmds) {
+    // Handle && and || chaining
+    // Split on && and || while preserving the operator
+    if (trimmedCmd.includes('&&') || trimmedCmd.includes('||')) {
+        const parts = trimmedCmd.split(/(&&|\|\|)/).map(c => c.trim()).filter(c => c);
+        let lastSuccess = true;
+        for (let i = 0; i < parts.length; i++) {
+            if (parts[i] === '&&') {
+                if (!lastSuccess) break; // Skip rest after failure
+                continue;
+            }
+            if (parts[i] === '||') {
+                if (lastSuccess) {
+                    // Skip the next command since the previous succeeded
+                    i++;
+                    continue;
+                }
+                continue;
+            }
             try {
-                await executeSingleCommand(subcmd);
+                await executeSingleCommand(parts[i]);
+                lastSuccess = true;
             } catch (error) {
                 printError(`Error: ${error.message}`);
-                break; // Stop chain on failure, like real bash
+                lastSuccess = false;
             }
         }
         await updateFileTree();
@@ -576,6 +773,16 @@ async function processCommand(cmd) {
     await executeSingleCommand(trimmedCmd);
     await updateFileTree();
     showPrompt();
+}
+
+function expandEnvVars(str) {
+    // Update PWD
+    envVars.PWD = currentDir;
+    // Expand ${VAR} and $VAR (not inside single quotes)
+    return str.replace(/\$\{(\w+)\}|\$(\w+)/g, (match, braced, plain) => {
+        const varName = braced || plain;
+        return envVars[varName] !== undefined ? envVars[varName] : match;
+    });
 }
 
 async function executeSingleCommand(trimmedCmd) {
@@ -638,6 +845,46 @@ async function executeSingleCommand(trimmedCmd) {
                 break;
             case 'echo':
                 await cmdEcho(args, trimmedCmd);
+                break;
+            case 'cp':
+                await cmdCp(args);
+                break;
+            case 'mv':
+                await cmdMv(args);
+                break;
+            case 'grep':
+                await cmdGrep(args);
+                break;
+            case 'head':
+                await cmdHead(args);
+                break;
+            case 'tail':
+                await cmdTail(args);
+                break;
+            case 'wc':
+                await cmdWc(args);
+                break;
+            case 'whoami':
+                printNormal('student');
+                break;
+            case 'hostname':
+                printNormal('git-learning-terminal');
+                break;
+            case 'date':
+                printNormal(new Date().toString());
+                break;
+            case 'find':
+                await cmdFind(args);
+                break;
+            case 'diff':
+                await cmdDiff(args);
+                break;
+            case 'env':
+            case 'printenv':
+                cmdEnv();
+                break;
+            case 'export':
+                cmdExport(args, trimmedCmd);
                 break;
             case 'git':
                 await cmdGit(args);
@@ -766,41 +1013,55 @@ async function cmdHelp() {
     printNormal('║                  Available Commands                        ║');
     printNormal('╚════════════════════════════════════════════════════════════╝\x1b[0m');
     printNormal('\x1b[36mFile System Commands:\x1b[0m');
-    printNormal('  ls [options]          - List directory contents');
+    printNormal('  ls [options]          - List directory contents (-l, -a, -la)');
     printNormal('  ll                    - List all files (alias for ls -la)');
     printNormal('  cd <directory>        - Change directory');
     printNormal('  pwd                   - Print working directory');
-    printNormal('  cat <file>            - Display file contents');
-    printNormal('  mkdir <directory>     - Create directory');
+    printNormal('  cat <file> [file2...] - Display file contents');
+    printNormal('  mkdir [-p] <dir>      - Create directory (-p for parents)');
     printNormal('  touch <file>          - Create empty file');
-    printNormal('  rm <file>             - Remove file');
+    printNormal('  rm [-rf] <file>       - Remove file or directory');
+    printNormal('  cp [-r] <src> <dest>  - Copy file or directory');
+    printNormal('  mv <src> <dest>       - Move/rename file or directory');
     printNormal('  echo <text>           - Print text or redirect to file');
+    printNormal('  head [-n N] <file>    - Display first N lines (default 10)');
+    printNormal('  tail [-n N] <file>    - Display last N lines (default 10)');
+    printNormal('  wc [-lwc] <file>      - Count lines, words, bytes');
+    printNormal('  grep [opts] PAT file  - Search for pattern (-i, -n, -v, -c, -r)');
+    printNormal('  find [dir] -name PAT  - Find files by name pattern');
+    printNormal('  diff <file1> <file2>  - Compare two files');
     printNormal('  vi/vim/nano <file>    - Edit file');
+    printNormal('  whoami                - Print current user');
+    printNormal('  hostname              - Print hostname');
+    printNormal('  date                  - Print current date/time');
+    printNormal('  env / printenv        - Print environment variables');
+    printNormal('  export KEY=VALUE      - Set environment variable');
     printNormal('  clear                 - Clear terminal');
     printNormal('  reset                 - Reset filesystem to initial state');
     printNormal('  history               - Show command history');
-    printNormal('  debug                 - Show debug information');
     printNormal('');
-    printNormal('\x1b[36mAdvanced Features:\x1b[0m');
+    printNormal('\x1b[36mShell Features:\x1b[0m');
     printNormal('  <cmd> && <cmd>        - Chain commands (stops on error)');
-    printNormal('  <cmd> | grep <text>   - Filter output with grep');
+    printNormal('  <cmd> || <cmd>        - Chain commands (runs on failure)');
+    printNormal('  <cmd> | <cmd>         - Pipe output (grep, head, tail, wc, sort, uniq)');
     printNormal('  echo "text" > file    - Write text to file');
     printNormal('  echo "text" >> file   - Append text to file');
+    printNormal('  $VAR / ${VAR}         - Environment variable expansion');
     printNormal('  Ctrl+R                - Reverse history search');
-    printNormal('  Tab                   - Auto-complete commands/files');
+    printNormal('  Tab                   - Auto-complete commands/files/branches');
     printNormal('  ↑/↓                   - Navigate command history');
     printNormal('');
     printNormal('\x1b[36mGit Commands (Basic):\x1b[0m');
     printNormal('  git init              - Initialize git repository');
     printNormal('  git status            - Show working tree status');
     printNormal('  git add <file>        - Add file to staging area');
-    printNormal('  git commit [flags]    - Commit changes (-m "msg", --amend)');
-    printNormal('  git log               - Show commit history');
-    printNormal('  git branch [name]     - List or create branches');
+    printNormal('  git commit [flags]    - Commit changes (-m, --amend, -a)');
+    printNormal('  git log [flags]       - Show commit history (-n, --oneline, --graph, --author)');
+    printNormal('  git branch [flags]    - List/create/delete/rename branches (-d, -D, -m)');
     printNormal('  git checkout <ref>    - Switch branches or restore files');
     printNormal('  git switch <branch>   - Switch branches (modern)');
     printNormal('  git restore <file>    - Restore working tree files');
-    printNormal('  git diff [file]       - Show changes');
+    printNormal('  git diff [flags]      - Show changes (--staged, --stat)');
     printNormal('  git reset [mode]      - Reset current HEAD (--soft, --mixed, --hard)');
     printNormal('');
     printNormal('\x1b[36mGit Commands (Advanced):\x1b[0m');
@@ -827,7 +1088,9 @@ async function cmdHelp() {
 
 async function cmdLs(args) {
     try {
-        const showHidden = args.includes('-a') || args.includes('-la') || args.includes('-al');
+        const flagArgs = args.filter(arg => arg.startsWith('-')).join('');
+        const showHidden = flagArgs.includes('a');
+        const longFormat = flagArgs.includes('l');
         const pathArgs = args.filter(arg => !arg.startsWith('-'));
 
         let targetDir = currentDir;
@@ -854,7 +1117,14 @@ async function cmdLs(args) {
 
         if (isFile) {
             term.writeln('');
-            term.writeln(targetName);
+            if (longFormat) {
+                const size = fileStat.size || 0;
+                const mtime = fileStat.mtimeMs ? new Date(fileStat.mtimeMs) : new Date();
+                const dateStr = formatLsDate(mtime);
+                term.writeln(`-rw-r--r--  1 student student ${String(size).padStart(6)} ${dateStr} ${targetName}`);
+            } else {
+                term.writeln(targetName);
+            }
             return;
         }
 
@@ -866,7 +1136,9 @@ async function cmdLs(args) {
             return {
                 name: file,
                 isDirectory: stats.isDirectory(),
-                isHidden: file.startsWith('.')
+                isHidden: file.startsWith('.'),
+                size: stats.size || 0,
+                mtime: stats.mtimeMs ? new Date(stats.mtimeMs) : new Date()
             };
         }));
 
@@ -874,32 +1146,54 @@ async function cmdLs(args) {
         const filtered = showHidden ? fileInfos : fileInfos.filter(f => !f.isHidden);
 
         if (filtered.length === 0) {
-            // printNormal('(empty directory)'); // Don't print for empty dirs to match ls
             return;
         }
 
-        // Print file list without leading newline
         term.writeln('');
-        filtered.forEach(file => {
-            let color = '\x1b[0m';
-            let suffix = '';
 
-            if (file.isDirectory) {
-                color = '\x1b[34m';
-                suffix = '/';
-            }
+        if (longFormat) {
+            // Calculate total blocks (simplified)
+            const totalSize = filtered.reduce((sum, f) => sum + (f.size || 0), 0);
+            term.writeln(`total ${Math.ceil(totalSize / 1024)}`);
 
-            if (file.isHidden) {
-                color = '\x1b[90m'; // Grey for hidden
-            }
+            filtered.forEach(file => {
+                const perms = file.isDirectory ? 'drwxr-xr-x' : '-rw-r--r--';
+                const size = String(file.size).padStart(6);
+                const dateStr = formatLsDate(file.mtime);
+                let color = '\x1b[0m';
+                let suffix = '';
 
-            term.writeln(`${color}${file.name}${suffix}\x1b[0m`);
-        });
+                if (file.isDirectory) {
+                    color = '\x1b[34m';
+                    suffix = '/';
+                }
+                if (file.isHidden) {
+                    color = '\x1b[90m';
+                }
+
+                term.writeln(`${perms}  1 student student ${size} ${dateStr} ${color}${file.name}${suffix}\x1b[0m`);
+            });
+        } else {
+            filtered.forEach(file => {
+                let color = '\x1b[0m';
+                let suffix = '';
+
+                if (file.isDirectory) {
+                    color = '\x1b[34m';
+                    suffix = '/';
+                }
+
+                if (file.isHidden) {
+                    color = '\x1b[90m'; // Grey for hidden
+                }
+
+                term.writeln(`${color}${file.name}${suffix}\x1b[0m`);
+            });
+        }
 
         // Add spacing before hint (only for current dir if there are hidden files)
         if (targetDir === currentDir && !showHidden && fileInfos.some(f => f.isHidden)) {
-            // term.writeln('');
-            // printHint('Use "ls -a" to show hidden files (like .git)');
+            // hint removed to match real ls behavior
         }
     } catch (error) {
         printError(`ls: ${error.message}`);
@@ -979,15 +1273,18 @@ async function cmdCat(args) {
         return;
     }
 
-    const filename = args[0];
-    const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+    for (const filename of args) {
+        const filepath = resolvePath(filename);
 
-    try {
-        const content = await pfs.readFile(filepath, 'utf8');
-        printNormal('');
-        term.writeln(content.split('\n').map(line => `\r\n${line}`).join(''));
-    } catch (error) {
-        printError(`cat: ${filename}: No such file or directory`);
+        try {
+            const content = await pfs.readFile(filepath, 'utf8');
+            term.writeln('');
+            content.split('\n').forEach(line => {
+                term.writeln(line);
+            });
+        } catch (error) {
+            printError(`cat: ${filename}: No such file or directory`);
+        }
     }
 }
 
@@ -1003,11 +1300,26 @@ async function cmdMkdir(args) {
     const recursive = flags.includes('-p');
 
     for (const dirname of dirs) {
-        const dirpath = dirname.startsWith('/') ? dirname : `${currentDir}/${dirname}`;
+        const dirpath = resolvePath(dirname);
 
         try {
-            await pfs.mkdir(dirpath, { recursive: true });
-            // Directory created silently, like in real terminals
+            if (!recursive) {
+                // Check that parent directory exists
+                const parentParts = dirpath.split('/');
+                parentParts.pop();
+                const parentPath = parentParts.join('/') || '/';
+                try {
+                    const parentStat = await pfs.stat(parentPath);
+                    if (!parentStat.isDirectory()) {
+                        printError(`mkdir: cannot create directory '${dirname}': Not a directory`);
+                        continue;
+                    }
+                } catch (e) {
+                    printError(`mkdir: cannot create directory '${dirname}': No such file or directory`);
+                    continue;
+                }
+            }
+            await pfs.mkdir(dirpath, { recursive: recursive });
         } catch (error) {
             printError(`mkdir: cannot create directory '${dirname}': ${error.message}`);
         }
@@ -1040,21 +1352,36 @@ async function cmdTouch(args) {
 }
 
 async function cmdEcho(_args, fullCmd) {
-    // Parse the full command to handle quotes and redirects properly
     // Extract everything after "echo "
-    const echoContent = fullCmd.replace(/^echo\s*/, '');
+    let echoContent = fullCmd.replace(/^echo\s*/, '');
 
-    // Check for redirect operators: > (overwrite) or >> (append)
-    const appendMatch = echoContent.match(/^(.*?)\s*>>\s*(.+)$/);
-    const overwriteMatch = echoContent.match(/^(.*?)\s*>\s*(.+)$/);
+    // Handle -n flag (no trailing newline)
+    let noNewline = false;
+    if (echoContent.startsWith('-n ')) {
+        noNewline = true;
+        echoContent = echoContent.slice(3);
+    }
 
-    if (appendMatch || overwriteMatch) {
-        const isAppend = !!appendMatch;
-        const match = isAppend ? appendMatch : overwriteMatch;
-        let text = match[1].trim().replace(/^["']|["']$/g, '');
-        const filename = match[2].trim();
-        const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+    // Check for redirect operators: >> (append) or > (overwrite)
+    // Match redirect that's not inside quotes
+    let redirectMatch = null;
+    let isAppend = false;
+    let textPart = echoContent;
+    let redirectFile = null;
 
+    // Simple redirect detection (outside quotes)
+    const redir = echoContent.match(/^((?:[^"'>]|"[^"]*"|'[^']*')*?)\s*(>>|>)\s*(.+)$/);
+    if (redir) {
+        textPart = redir[1].trim();
+        isAppend = redir[2] === '>>';
+        redirectFile = redir[3].trim();
+    }
+
+    // Process the text: strip matching outer quotes, handle adjacent quoted segments
+    let text = processEchoText(textPart);
+
+    if (redirectFile) {
+        const filepath = resolvePath(redirectFile);
         try {
             if (isAppend) {
                 let existing = '';
@@ -1069,9 +1396,49 @@ async function cmdEcho(_args, fullCmd) {
         return;
     }
 
-    // No redirect, just print to terminal
-    const text = echoContent.replace(/^["']|["']$/g, '');
-    printNormal(text);
+    // No redirect, just print
+    if (noNewline) {
+        term.write(`\r\n${text}`);
+    } else {
+        printNormal(text);
+    }
+}
+
+function processEchoText(text) {
+    // Process echo text: handle "double quotes", 'single quotes', and concatenation
+    let result = '';
+    let i = 0;
+    while (i < text.length) {
+        if (text[i] === '"') {
+            // Double-quoted: find closing quote
+            let j = i + 1;
+            while (j < text.length && text[j] !== '"') {
+                if (text[j] === '\\' && j + 1 < text.length) {
+                    result += text[j + 1];
+                    j += 2;
+                } else {
+                    result += text[j];
+                    j++;
+                }
+            }
+            i = j + 1;
+        } else if (text[i] === "'") {
+            // Single-quoted: literal, find closing quote
+            let j = i + 1;
+            while (j < text.length && text[j] !== "'") {
+                result += text[j];
+                j++;
+            }
+            i = j + 1;
+        } else if (text[i] === '\\' && i + 1 < text.length) {
+            result += text[i + 1];
+            i += 2;
+        } else {
+            result += text[i];
+            i++;
+        }
+    }
+    return result;
 }
 
 async function cmdRm(args) {
@@ -1083,6 +1450,8 @@ async function cmdRm(args) {
     // Extract flags
     const flags = args.filter(a => a.startsWith('-'));
     const files = args.filter(a => !a.startsWith('-'));
+    const recursive = flags.some(f => f.includes('r') || f.includes('R'));
+    const force = flags.some(f => f.includes('f'));
 
     if (files.length === 0) {
         printError('rm: missing operand');
@@ -1090,14 +1459,423 @@ async function cmdRm(args) {
     }
 
     for (const filename of files) {
-        const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+        const filepath = resolvePath(filename);
 
         try {
-            await pfs.unlink(filepath);
+            const stat = await pfs.stat(filepath);
+            if (stat.isDirectory()) {
+                if (!recursive) {
+                    printError(`rm: cannot remove '${filename}': Is a directory`);
+                    printHint('Use rm -r to remove directories');
+                    continue;
+                }
+                await removeDirectory(filepath);
+            } else {
+                await pfs.unlink(filepath);
+            }
         } catch (error) {
-            printError(`rm: cannot remove '${filename}': ${error.message}`);
+            if (!force) {
+                printError(`rm: cannot remove '${filename}': No such file or directory`);
+            }
         }
     }
+}
+
+async function cmdCp(args) {
+    const flags = args.filter(a => a.startsWith('-'));
+    const paths = args.filter(a => !a.startsWith('-'));
+    const recursive = flags.some(f => f.includes('r') || f.includes('R'));
+
+    if (paths.length < 2) {
+        printError('cp: missing file operand');
+        printHint('Usage: cp [-r] <source> <destination>');
+        return;
+    }
+
+    const src = resolvePath(paths[0]);
+    const dest = resolvePath(paths[1]);
+
+    try {
+        const srcStat = await pfs.stat(src);
+
+        if (srcStat.isDirectory()) {
+            if (!recursive) {
+                printError(`cp: -r not specified; omitting directory '${paths[0]}'`);
+                return;
+            }
+            await copyDirectoryRecursive(src, dest);
+        } else {
+            // Check if dest is a directory
+            let destPath = dest;
+            try {
+                const destStat = await pfs.stat(dest);
+                if (destStat.isDirectory()) {
+                    destPath = `${dest}/${paths[0].split('/').pop()}`;
+                }
+            } catch (e) { /* dest doesn't exist, use as-is */ }
+            const content = await pfs.readFile(src, 'utf8');
+            await pfs.writeFile(destPath, content, 'utf8');
+        }
+    } catch (error) {
+        printError(`cp: cannot stat '${paths[0]}': No such file or directory`);
+    }
+}
+
+async function copyDirectoryRecursive(src, dest) {
+    try { await pfs.mkdir(dest); } catch (e) { /* exists */ }
+    const entries = await pfs.readdir(src);
+    for (const entry of entries) {
+        const srcPath = `${src}/${entry}`;
+        const destPath = `${dest}/${entry}`;
+        const stat = await pfs.stat(srcPath);
+        if (stat.isDirectory()) {
+            await copyDirectoryRecursive(srcPath, destPath);
+        } else {
+            const content = await pfs.readFile(srcPath, 'utf8');
+            await pfs.writeFile(destPath, content, 'utf8');
+        }
+    }
+}
+
+async function cmdMv(args) {
+    if (args.length < 2) {
+        printError('mv: missing file operand');
+        printHint('Usage: mv <source> <destination>');
+        return;
+    }
+
+    const src = resolvePath(args[0]);
+    const dest = resolvePath(args[1]);
+
+    try {
+        const srcStat = await pfs.stat(src);
+
+        let destPath = dest;
+        try {
+            const destStat = await pfs.stat(dest);
+            if (destStat.isDirectory()) {
+                destPath = `${dest}/${args[0].split('/').pop()}`;
+            }
+        } catch (e) { /* dest doesn't exist */ }
+
+        if (srcStat.isDirectory()) {
+            // Move directory: copy + remove
+            await copyDirectoryRecursive(src, destPath);
+            await removeDirectory(src);
+        } else {
+            const content = await pfs.readFile(src, 'utf8');
+            await pfs.writeFile(destPath, content, 'utf8');
+            await pfs.unlink(src);
+        }
+    } catch (error) {
+        printError(`mv: cannot stat '${args[0]}': No such file or directory`);
+    }
+}
+
+async function cmdGrep(args) {
+    const flags = args.filter(a => a.startsWith('-'));
+    const nonFlags = args.filter(a => !a.startsWith('-'));
+    const ignoreCase = flags.some(f => f.includes('i'));
+    const lineNumbers = flags.some(f => f.includes('n'));
+    const invertMatch = flags.some(f => f.includes('v'));
+    const countOnly = flags.some(f => f.includes('c'));
+    const recursive = flags.some(f => f.includes('r') || f.includes('R'));
+
+    if (nonFlags.length < 1) {
+        printError('Usage: grep [options] PATTERN [FILE...]');
+        return;
+    }
+
+    const pattern = nonFlags[0];
+    const fileArgs = nonFlags.slice(1);
+    let regex;
+    try {
+        regex = new RegExp(pattern, ignoreCase ? 'i' : '');
+    } catch (e) {
+        printError(`grep: Invalid regex pattern: ${pattern}`);
+        return;
+    }
+
+    const targets = fileArgs.length > 0 ? fileArgs : ['.'];
+    const multiFile = fileArgs.length > 1 || recursive;
+
+    async function grepFile(filepath, displayName) {
+        try {
+            const content = await pfs.readFile(filepath, 'utf8');
+            const lines = content.split('\n');
+            let matchCount = 0;
+            const results = [];
+
+            lines.forEach((line, idx) => {
+                const matches = regex.test(line);
+                if (matches !== invertMatch) {
+                    matchCount++;
+                    if (!countOnly) {
+                        const prefix = multiFile ? `\x1b[35m${displayName}\x1b[36m:\x1b[0m` : '';
+                        const lineNum = lineNumbers ? `\x1b[32m${idx + 1}\x1b[36m:\x1b[0m` : '';
+                        // Highlight matches
+                        const highlighted = line.replace(regex, (m) => `\x1b[1;31m${m}\x1b[0m`);
+                        results.push(`${prefix}${lineNum}${highlighted}`);
+                    }
+                }
+            });
+
+            if (countOnly) {
+                const prefix = multiFile ? `${displayName}:` : '';
+                printNormal(`${prefix}${matchCount}`);
+            } else {
+                results.forEach(r => term.writeln(`\r\n${r}`));
+            }
+        } catch (e) {
+            // Skip non-readable files
+        }
+    }
+
+    async function grepDir(dirPath, prefix) {
+        try {
+            const entries = await pfs.readdir(dirPath);
+            for (const entry of entries) {
+                if (entry.startsWith('.')) continue;
+                const fullPath = `${dirPath}/${entry}`;
+                const displayName = prefix ? `${prefix}/${entry}` : entry;
+                try {
+                    const stat = await pfs.stat(fullPath);
+                    if (stat.isDirectory()) {
+                        if (recursive) await grepDir(fullPath, displayName);
+                    } else {
+                        await grepFile(fullPath, displayName);
+                    }
+                } catch (e) { }
+            }
+        } catch (e) { }
+    }
+
+    for (const target of targets) {
+        const resolvedPath = resolvePath(target);
+        try {
+            const stat = await pfs.stat(resolvedPath);
+            if (stat.isDirectory()) {
+                if (!recursive) {
+                    printError(`grep: ${target}: Is a directory`);
+                } else {
+                    await grepDir(resolvedPath, target === '.' ? '' : target);
+                }
+            } else {
+                await grepFile(resolvedPath, target);
+            }
+        } catch (e) {
+            printError(`grep: ${target}: No such file or directory`);
+        }
+    }
+}
+
+async function cmdHead(args) {
+    let lines = 10;
+    const files = [];
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === '-n' && i + 1 < args.length) {
+            lines = parseInt(args[++i], 10);
+        } else if (args[i].startsWith('-') && !isNaN(args[i].slice(1))) {
+            lines = parseInt(args[i].slice(1), 10);
+        } else if (!args[i].startsWith('-')) {
+            files.push(args[i]);
+        }
+    }
+
+    if (files.length === 0) {
+        printError('head: missing file operand');
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            const content = await pfs.readFile(resolvePath(file), 'utf8');
+            if (files.length > 1) printNormal(`==> ${file} <==`);
+            const allLines = content.split('\n');
+            allLines.slice(0, lines).forEach(l => term.writeln(`\r\n${l}`));
+        } catch (e) {
+            printError(`head: cannot open '${file}': No such file or directory`);
+        }
+    }
+}
+
+async function cmdTail(args) {
+    let lines = 10;
+    const files = [];
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === '-n' && i + 1 < args.length) {
+            lines = parseInt(args[++i], 10);
+        } else if (args[i].startsWith('-') && !isNaN(args[i].slice(1))) {
+            lines = parseInt(args[i].slice(1), 10);
+        } else if (!args[i].startsWith('-')) {
+            files.push(args[i]);
+        }
+    }
+
+    if (files.length === 0) {
+        printError('tail: missing file operand');
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            const content = await pfs.readFile(resolvePath(file), 'utf8');
+            if (files.length > 1) printNormal(`==> ${file} <==`);
+            const allLines = content.split('\n');
+            allLines.slice(-lines).forEach(l => term.writeln(`\r\n${l}`));
+        } catch (e) {
+            printError(`tail: cannot open '${file}': No such file or directory`);
+        }
+    }
+}
+
+async function cmdWc(args) {
+    const flags = args.filter(a => a.startsWith('-'));
+    const files = args.filter(a => !a.startsWith('-'));
+    const showLines = flags.length === 0 || flags.some(f => f.includes('l'));
+    const showWords = flags.length === 0 || flags.some(f => f.includes('w'));
+    const showBytes = flags.length === 0 || flags.some(f => f.includes('c'));
+
+    if (files.length === 0) {
+        printError('wc: missing file operand');
+        return;
+    }
+
+    let totalLines = 0, totalWords = 0, totalBytes = 0;
+
+    for (const file of files) {
+        try {
+            const content = await pfs.readFile(resolvePath(file), 'utf8');
+            const lineCount = content.split('\n').length;
+            const wordCount = content.split(/\s+/).filter(w => w).length;
+            const byteCount = new TextEncoder().encode(content).length;
+
+            totalLines += lineCount;
+            totalWords += wordCount;
+            totalBytes += byteCount;
+
+            let out = '';
+            if (showLines) out += String(lineCount).padStart(8);
+            if (showWords) out += String(wordCount).padStart(8);
+            if (showBytes) out += String(byteCount).padStart(8);
+            out += ` ${file}`;
+            printNormal(out);
+        } catch (e) {
+            printError(`wc: ${file}: No such file or directory`);
+        }
+    }
+
+    if (files.length > 1) {
+        let out = '';
+        if (showLines) out += String(totalLines).padStart(8);
+        if (showWords) out += String(totalWords).padStart(8);
+        if (showBytes) out += String(totalBytes).padStart(8);
+        out += ' total';
+        printNormal(out);
+    }
+}
+
+async function cmdFind(args) {
+    let searchDir = '.';
+    let namePattern = null;
+    let typeFilter = null;
+
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === '-name' && i + 1 < args.length) {
+            namePattern = args[++i].replace(/^["']|["']$/g, '');
+        } else if (args[i] === '-type' && i + 1 < args.length) {
+            typeFilter = args[++i];
+        } else if (!args[i].startsWith('-')) {
+            searchDir = args[i];
+        }
+    }
+
+    const rootPath = resolvePath(searchDir);
+
+    async function findRecursive(dirPath, prefix) {
+        try {
+            const entries = await pfs.readdir(dirPath);
+            for (const entry of entries) {
+                if (entry === '.git') continue;
+                const fullPath = `${dirPath}/${entry}`;
+                const displayPath = prefix ? `${prefix}/${entry}` : `./${entry}`;
+                try {
+                    const stat = await pfs.stat(fullPath);
+                    const isDir = stat.isDirectory();
+
+                    // Type filter: 'f' = file, 'd' = directory
+                    if (typeFilter === 'f' && isDir) { /* skip display */ }
+                    else if (typeFilter === 'd' && !isDir) { /* skip display */ }
+                    else {
+                        // Name matching with glob support
+                        if (namePattern) {
+                            const regex = new RegExp('^' + namePattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+                            if (regex.test(entry)) {
+                                printNormal(displayPath);
+                            }
+                        } else {
+                            printNormal(displayPath);
+                        }
+                    }
+
+                    if (isDir) {
+                        await findRecursive(fullPath, displayPath);
+                    }
+                } catch (e) { }
+            }
+        } catch (e) { }
+    }
+
+    // Print root directory first (unless type filter excludes directories)
+    if (typeFilter !== 'f') {
+        printNormal(searchDir === '.' ? '.' : searchDir);
+    }
+    await findRecursive(rootPath, searchDir === '.' ? '.' : searchDir);
+}
+
+async function cmdDiff(args) {
+    if (args.length < 2) {
+        printError('Usage: diff <file1> <file2>');
+        return;
+    }
+
+    try {
+        const content1 = await pfs.readFile(resolvePath(args[0]), 'utf8');
+        const content2 = await pfs.readFile(resolvePath(args[1]), 'utf8');
+
+        if (content1 === content2) {
+            // No output for identical files (matches real diff)
+            return;
+        }
+
+        await printColorizedDiff(content1, content2, args[1]);
+    } catch (e) {
+        printError(`diff: ${e.message}`);
+    }
+}
+
+function cmdEnv() {
+    // Update PWD
+    envVars.PWD = currentDir;
+    for (const [key, value] of Object.entries(envVars)) {
+        printNormal(`${key}=${value}`);
+    }
+}
+
+function cmdExport(args, fullCmd) {
+    const exportContent = fullCmd.replace(/^export\s+/, '');
+    const eqIndex = exportContent.indexOf('=');
+    if (eqIndex === -1) {
+        // Just show the variable
+        const val = envVars[exportContent.trim()];
+        if (val !== undefined) {
+            printNormal(`declare -x ${exportContent.trim()}="${val}"`);
+        }
+        return;
+    }
+    const key = exportContent.substring(0, eqIndex).trim();
+    let value = exportContent.substring(eqIndex + 1).trim().replace(/^["']|["']$/g, '');
+    envVars[key] = value;
 }
 
 async function cmdEdit(args) {
@@ -1406,9 +2184,8 @@ async function gitAdd(args) {
 
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
-        const file = args[0];
 
-        if (file === '.') {
+        if (args[0] === '.') {
             // Add all files (including deletions)
             const status = await git.statusMatrix({ fs, dir });
             for (const [filepath, HEADStatus, workdirStatus] of status) {
@@ -1423,8 +2200,33 @@ async function gitAdd(args) {
             printNormal('All changes added to staging area');
             printHint('Now use "git commit -m <message>" to save these changes');
         } else {
-            await git.add({ fs, dir, filepath: file });
-            printNormal(`Added ${file} to staging area`);
+            for (const file of args) {
+                // Resolve the filepath relative to repo root
+                const absPath = resolvePath(file);
+                let relPath = absPath;
+                if (absPath.startsWith(dir + '/')) {
+                    relPath = absPath.slice(dir.length + 1);
+                } else if (absPath.startsWith(dir)) {
+                    relPath = absPath.slice(dir.length);
+                    if (relPath.startsWith('/')) relPath = relPath.slice(1);
+                }
+                // If relPath is empty (user typed the repo root), treat as '.'
+                if (!relPath) relPath = file;
+
+                try {
+                    // Check if file was deleted
+                    try {
+                        await pfs.stat(absPath);
+                        await git.add({ fs, dir, filepath: relPath });
+                    } catch (e) {
+                        // File doesn't exist on disk - remove from index
+                        await git.remove({ fs, dir, filepath: relPath });
+                    }
+                    printNormal(`Added ${file} to staging area`);
+                } catch (error) {
+                    printError(`git add: '${file}': ${error.message}`);
+                }
+            }
             printHint('Use "git status" to see what\'s staged, then "git commit -m <message>" to commit');
         }
     } catch (error) {
@@ -1437,13 +2239,34 @@ async function gitCommit(args) {
     try {
         const dir = await git.findRoot({ fs, filepath: currentDir });
         const hasAmend = args.includes('--amend');
+        const autoStage = args.includes('-a') || args.includes('-am');
 
         // Parse commit message
         let message = '';
         const mIndex = args.indexOf('-m');
+        // Handle -am "message" shorthand
+        const amIndex = args.indexOf('-am');
         if (mIndex !== -1 && args.length > mIndex + 1) {
-            // Join all args after -m as the message
             message = args.slice(mIndex + 1).join(' ').replace(/^["']|["']$/g, '');
+        } else if (amIndex !== -1 && args.length > amIndex + 1) {
+            message = args.slice(amIndex + 1).join(' ').replace(/^["']|["']$/g, '');
+        }
+
+        // Auto-stage tracked modified files
+        if (autoStage) {
+            const statusMatrix = await git.statusMatrix({ fs, dir });
+            for (const [filepath, HEADStatus, workdirStatus, stageStatus] of statusMatrix) {
+                // Stage tracked files that are modified (HEADStatus=1 means tracked)
+                if (HEADStatus === 1 && workdirStatus !== 1) {
+                    if (workdirStatus === 0) {
+                        // Deleted
+                        await git.remove({ fs, dir, filepath });
+                    } else {
+                        // Modified
+                        await git.add({ fs, dir, filepath });
+                    }
+                }
+            }
         }
 
         if (hasAmend) {
@@ -1457,19 +2280,22 @@ async function gitCommit(args) {
             const lastCommit = commits[0];
             const parentOid = lastCommit.commit.parent[0] || null;
 
-            // Use new message or keep the old one
-            const amendMessage = message || lastCommit.commit.message;
+            if (!message) {
+                // No -m flag: open editor pre-filled with old commit message
+                await openCommitMessageEditor(dir, true, lastCommit.commit.message);
+                return;
+            }
 
-            // Get current HEAD tree
-            const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
-            const { tree } = await git.readCommit({ fs, dir, oid: headOid });
+            // Use new message
+            const amendMessage = message;
 
             // Create new commit with parent of the amended commit
+            const author = await getAuthor(dir);
             const newCommitOid = await git.commit({
                 fs,
                 dir,
                 message: amendMessage,
-                author: { name: 'Student', email: 'student@example.com' },
+                author,
                 parent: parentOid ? [parentOid] : []
             });
 
@@ -1487,10 +2313,11 @@ async function gitCommit(args) {
 
         const currentBranch = await git.currentBranch({ fs, dir }).catch(() => 'main') || 'main';
 
+        const author = await getAuthor(dir);
         const sha = await git.commit({
             fs,
             dir,
-            author: { name: 'Student', email: 'student@example.com' },
+            author,
             message
         });
         // Small delay to ensure FS allows subsequent reads (fix for multi-line paste)
@@ -1506,28 +2333,28 @@ async function gitCommit(args) {
     }
 }
 
-async function openCommitMessageEditor(dir) {
+async function openCommitMessageEditor(dir, isAmend = false, existingMessage = '') {
     // Get the list of staged files
     const statusMatrix = await git.statusMatrix({ fs, dir });
     const stagedFiles = statusMatrix.filter(([filepath, head, workdir, stage]) => {
-        // staged=2 means staged for commit
         return stage === 2;
     });
 
-    if (stagedFiles.length === 0) {
+    if (!isAmend && stagedFiles.length === 0) {
         printError('No changes added to commit');
         printHint('Use "git add <file>..." to stage files for commit');
         return;
     }
 
-    // Generate commit message template with helpful comments
-    // Start with two empty lines for user to write commit message
-    let template = `
-
+    // Generate commit message template
+    const branchName = await git.currentBranch({ fs, dir }).catch(() => 'main');
+    let template = isAmend ? existingMessage.replace(/\n$/, '') : '';
+    template += `
+${isAmend ? '\n# Amending commit.' : ''}
 # Please enter the commit message for your changes. Lines starting
 # with '#' will be ignored, and an empty message aborts the commit.
 #
-# On branch ${await git.currentBranch({ fs, dir }).catch(() => 'main')}
+# On branch ${branchName}
 # Changes to be committed:
 `;
 
@@ -1552,6 +2379,7 @@ async function openCommitMessageEditor(dir) {
     // Set commit message mode flags
     isCommitMessageMode = true;
     commitMessageDir = dir;
+    commitMessageIsAmend = isAmend;
 
     // Use the existing openEditor function
     openEditor('COMMIT_EDITMSG', template);
@@ -1601,13 +2429,29 @@ async function saveCommitMessage(dir) {
 
     try {
         console.log('Attempting to commit...');
-        // Commit with the message
-        const sha = await git.commit({
-            fs,
-            dir,
-            author: { name: 'Student', email: 'student@example.com' },
-            message
-        });
+        const author = await getAuthor(dir);
+        let sha;
+
+        if (commitMessageIsAmend) {
+            // Amend: get existing commit's parent to replace it
+            const commits = await git.log({ fs, dir, depth: 1 });
+            const lastCommit = commits[0];
+            const parentOid = lastCommit.commit.parent[0] || null;
+            sha = await git.commit({
+                fs,
+                dir,
+                message,
+                author,
+                parent: parentOid ? [parentOid] : []
+            });
+        } else {
+            sha = await git.commit({
+                fs,
+                dir,
+                author,
+                message
+            });
+        }
 
         console.log('Commit successful, SHA:', sha);
 
@@ -1618,6 +2462,7 @@ async function saveCommitMessage(dir) {
         // Clear commit message mode flags
         isCommitMessageMode = false;
         commitMessageDir = null;
+        commitMessageIsAmend = false;
 
         // Close editor first, then print success messages
         closeEditor();
@@ -1635,6 +2480,7 @@ async function saveCommitMessage(dir) {
         // Clear commit message mode flags
         isCommitMessageMode = false;
         commitMessageDir = null;
+        commitMessageIsAmend = false;
 
         closeEditor();
         setTimeout(() => {
@@ -1648,6 +2494,7 @@ function cancelCommit() {
     // Clear commit message mode flags
     isCommitMessageMode = false;
     commitMessageDir = null;
+    commitMessageIsAmend = false;
 
     printError('Commit cancelled.');
     closeEditor();
@@ -1663,8 +2510,25 @@ async function gitLog(args) {
         const showAll = args.includes('--all');
         const showDecorate = args.includes('--decorate') || showOneline;
 
+        // Parse -n / -<number> for max count
+        let maxCount = null;
+        let authorFilter = null;
+        for (let i = 0; i < args.length; i++) {
+            if (args[i] === '-n' && i + 1 < args.length) {
+                maxCount = parseInt(args[i + 1], 10);
+                i++;
+            } else if (args[i].match(/^-(\d+)$/)) {
+                maxCount = parseInt(args[i].slice(1), 10);
+            } else if (args[i] === '--author' && i + 1 < args.length) {
+                authorFilter = args[i + 1].toLowerCase();
+                i++;
+            } else if (args[i].startsWith('--author=')) {
+                authorFilter = args[i].slice(9).replace(/^["']|["']$/g, '').toLowerCase();
+            }
+        }
+
         // Support --all flag for more commits
-        const depth = showAll ? 100 : 20;
+        const depth = showAll ? 100 : (maxCount ? Math.max(maxCount * 2, 40) : 20);
 
         let commits = [];
         try {
@@ -1708,6 +2572,25 @@ async function gitLog(args) {
         if (commits.length === 0) {
             printNormal('No commits yet');
             printHint('Create your first commit with "git add <file>" and "git commit -m <message>"');
+            return;
+        }
+
+        // Apply --author filter
+        if (authorFilter) {
+            commits = commits.filter(c => {
+                const name = (c.commit.author?.name || '').toLowerCase();
+                const email = (c.commit.author?.email || '').toLowerCase();
+                return name.includes(authorFilter) || email.includes(authorFilter);
+            });
+        }
+
+        // Apply -n limit
+        if (maxCount && maxCount > 0) {
+            commits = commits.slice(0, maxCount);
+        }
+
+        if (commits.length === 0) {
+            printNormal('No matching commits found.');
             return;
         }
 
@@ -2091,6 +2974,73 @@ async function gitBranch(args) {
         // Check for flags
         const showRemote = args.includes('-r') || args.includes('--remotes');
         const showAll = args.includes('-a') || args.includes('--all');
+        const deleteBranch = args.includes('-d') || args.includes('-D') || args.includes('--delete');
+        const forceDelete = args.includes('-D');
+        const renameBranch = args.includes('-m') || args.includes('-M');
+
+        if (deleteBranch) {
+            const branchName = args.find(a => !a.startsWith('-'));
+            if (!branchName) {
+                printError('fatal: branch name required');
+                return;
+            }
+            const currentBranch = await git.currentBranch({ fs, dir });
+            if (branchName === currentBranch) {
+                printError(`error: Cannot delete branch '${branchName}' checked out at '${dir}'`);
+                return;
+            }
+            try {
+                await git.deleteBranch({ fs, dir, ref: branchName });
+                printNormal(`Deleted branch ${branchName}.`);
+            } catch (e) {
+                if (forceDelete) {
+                    try {
+                        await git.deleteBranch({ fs, dir, ref: branchName });
+                    } catch (e2) {
+                        printError(`error: branch '${branchName}' not found.`);
+                    }
+                } else {
+                    printError(`error: The branch '${branchName}' is not fully merged.`);
+                    printHint('Use "git branch -D <branch>" to force deletion.');
+                }
+            }
+            return;
+        }
+
+        if (renameBranch) {
+            const nonFlags = args.filter(a => !a.startsWith('-'));
+            if (nonFlags.length === 0) {
+                printError('fatal: branch name required');
+                return;
+            }
+            const currentBranch = await git.currentBranch({ fs, dir });
+            let oldName, newName;
+            if (nonFlags.length === 1) {
+                oldName = currentBranch;
+                newName = nonFlags[0];
+            } else {
+                oldName = nonFlags[0];
+                newName = nonFlags[1];
+            }
+            try {
+                await git.renameBranch({ fs, dir, ref: newName, oldref: oldName });
+                printNormal(`Branch '${oldName}' renamed to '${newName}'.`);
+            } catch (e) {
+                // Fallback: create new, delete old
+                try {
+                    const oid = await git.resolveRef({ fs, dir, ref: oldName });
+                    await git.branch({ fs, dir, ref: newName, object: oid });
+                    await git.deleteBranch({ fs, dir, ref: oldName });
+                    if (oldName === currentBranch) {
+                        await git.checkout({ fs, dir, ref: newName });
+                    }
+                    printNormal(`Branch '${oldName}' renamed to '${newName}'.`);
+                } catch (e2) {
+                    printError(`error: ${e2.message}`);
+                }
+            }
+            return;
+        }
 
         if (args.length === 0 || showRemote || showAll) {
             // List branches
@@ -2296,6 +3246,7 @@ async function gitDiff(args) {
 
         // Parse arguments for diff mode
         const isStaged = args.includes('--staged') || args.includes('--cached');
+        const showStat = args.includes('--stat');
         const flags = args.filter(a => a.startsWith('-'));
         const nonFlags = args.filter(a => !a.startsWith('-'));
 
@@ -2355,12 +3306,20 @@ async function gitDiff(args) {
 
         // Case 3: git diff --staged [file]
         if (isStaged) {
-            await printDiffStaged(dir, specificFile);
+            if (showStat) {
+                await printDiffStatStaged(dir, specificFile);
+            } else {
+                await printDiffStaged(dir, specificFile);
+            }
             return;
         }
 
         // Case 4: git diff [file] (Working Dir vs Index)
-        await printDiffWorkdirIndex(dir, specificFile);
+        if (showStat) {
+            await printDiffStatWorkdir(dir, specificFile);
+        } else {
+            await printDiffWorkdirIndex(dir, specificFile);
+        }
 
     } catch (error) {
         printError(`git diff failed: ${error.message}`);
@@ -2535,17 +3494,104 @@ async function printDiffWorkdirIndex(dir, specificFile) {
     if (!hasChanges) printNormal('No changes.');
 }
 
-async function compareTrees(dir, tree1, tree2, specificFile) {
-    // Simplified tree comparison
-    const files1 = {};
-    const files2 = {};
+async function printDiffStatWorkdir(dir, specificFile) {
+    const status = await git.statusMatrix({ fs, dir });
+    const stats = [];
 
-    for (const entry of tree1.tree) if (entry.type === 'blob') files1[entry.path] = entry.oid;
-    for (const entry of tree2.tree) if (entry.type === 'blob') files2[entry.path] = entry.oid;
+    for (const [filepath, HEADStatus, workdirStatus, stageStatus] of status) {
+        if (filepath.startsWith('.git/')) continue;
+        if (specificFile && filepath !== specificFile) continue;
+        if (stageStatus === 0) continue;
+
+        if (workdirStatus === 0 || (workdirStatus === 2 && stageStatus !== 2)) {
+            let oldContent = '';
+            let newContent = '';
+
+            if (HEADStatus === 1) {
+                try {
+                    const commitOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+                    const { blob } = await git.readBlob({ fs, dir, oid: commitOid, filepath });
+                    oldContent = new TextDecoder().decode(blob);
+                } catch (e) { }
+            }
+            try { newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8'); } catch (e) { }
+
+            const diff = Diff.structuredPatch('', '', oldContent, newContent, '', '');
+            let added = 0, removed = 0;
+            diff.hunks.forEach(h => h.lines.forEach(l => { if (l[0] === '+') added++; if (l[0] === '-') removed++; }));
+            stats.push({ filepath, added, removed });
+        }
+    }
+    printStatSummary(stats);
+}
+
+async function printDiffStatStaged(dir, specificFile) {
+    const status = await git.statusMatrix({ fs, dir });
+    const stats = [];
+
+    for (const [filepath, HEADStatus, workdirStatus, stageStatus] of status) {
+        if (filepath.startsWith('.git/')) continue;
+        if (specificFile && filepath !== specificFile) continue;
+        if (stageStatus === 2 || stageStatus === 3 || (HEADStatus === 1 && stageStatus === 0)) {
+            let oldContent = '';
+            let newContent = '';
+
+            if (HEADStatus === 1) {
+                try {
+                    const commitOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+                    const { blob } = await git.readBlob({ fs, dir, oid: commitOid, filepath });
+                    oldContent = new TextDecoder().decode(blob);
+                } catch (e) { }
+            }
+            if (stageStatus !== 0) {
+                try { newContent = await pfs.readFile(`${dir}/${filepath}`, 'utf8'); } catch (e) { }
+            }
+
+            const diff = Diff.structuredPatch('', '', oldContent, newContent, '', '');
+            let added = 0, removed = 0;
+            diff.hunks.forEach(h => h.lines.forEach(l => { if (l[0] === '+') added++; if (l[0] === '-') removed++; }));
+            stats.push({ filepath, added, removed });
+        }
+    }
+    printStatSummary(stats);
+}
+
+function printStatSummary(stats) {
+    if (stats.length === 0) {
+        printNormal('No changes.');
+        return;
+    }
+
+    const maxNameLen = Math.max(...stats.map(s => s.filepath.length));
+    const maxChanges = Math.max(...stats.map(s => s.added + s.removed));
+    const barWidth = Math.min(40, maxChanges);
+    let totalAdded = 0, totalRemoved = 0;
+
+    term.writeln('');
+    for (const s of stats) {
+        totalAdded += s.added;
+        totalRemoved += s.removed;
+        const total = s.added + s.removed;
+        const scale = maxChanges > barWidth ? barWidth / maxChanges : 1;
+        const plusCount = Math.round(s.added * scale) || (s.added > 0 ? 1 : 0);
+        const minusCount = Math.round(s.removed * scale) || (s.removed > 0 ? 1 : 0);
+        const bar = `\x1b[32m${'+'.repeat(plusCount)}\x1b[31m${'-'.repeat(minusCount)}\x1b[0m`;
+        term.writeln(` ${s.filepath.padEnd(maxNameLen)} | ${String(total).padStart(4)} ${bar}`);
+    }
+    term.writeln(` ${stats.length} file${stats.length !== 1 ? 's' : ''} changed, ${totalAdded} insertion${totalAdded !== 1 ? 's' : ''}(+), ${totalRemoved} deletion${totalRemoved !== 1 ? 's' : ''}(-)`);
+}
+
+async function compareTrees(dir, tree1, tree2, specificFile) {
+    // Recursively flatten both trees to get all files (including subdirectories)
+    const tree1Oid = tree1.oid;
+    const tree2Oid = tree2.oid;
+
+    const files1 = tree1Oid ? await flattenTree(dir, tree1Oid) : {};
+    const files2 = tree2Oid ? await flattenTree(dir, tree2Oid) : {};
 
     const allFiles = new Set([...Object.keys(files1), ...Object.keys(files2)]);
 
-    for (const filepath of allFiles) {
+    for (const filepath of [...allFiles].sort()) {
         if (specificFile && filepath !== specificFile) continue;
 
         const oid1 = files1[filepath];
@@ -2557,13 +3603,13 @@ async function compareTrees(dir, tree1, tree2, specificFile) {
 
             if (oid1) {
                 try {
-                    const { blob } = await git.readBlob({ fs, dir, oid: oid1, filepath });
+                    const { blob } = await git.readBlob({ fs, dir, oid: oid1 });
                     oldContent = new TextDecoder().decode(blob);
                 } catch (e) { }
             }
             if (oid2) {
                 try {
-                    const { blob } = await git.readBlob({ fs, dir, oid: oid2, filepath });
+                    const { blob } = await git.readBlob({ fs, dir, oid: oid2 });
                     newContent = new TextDecoder().decode(blob);
                 } catch (e) { }
             }
@@ -3403,7 +4449,7 @@ async function gitMerge(args) {
             dir,
             ours: currentBranch,
             theirs: branchToMerge,
-            author: { name: 'Student', email: 'student@example.com' },
+            author: await getAuthor(dir),
             dryRun: false,
             noUpdateBranch: false
         });
@@ -3471,24 +4517,35 @@ async function gitTag(args) {
         return;
     }
 
-    const tagName = args[0];
+    // Delete tag
+    if (args.includes('-d')) {
+        const dIndex = args.indexOf('-d');
+        const deleteTagName = args.find((a, i) => i !== dIndex && !a.startsWith('-'));
+        if (!deleteTagName) {
+            printError('fatal: tag name required');
+            printHint('Usage: git tag -d <tagname>');
+            return;
+        }
+        try {
+            await git.deleteTag({ fs, dir, ref: deleteTagName });
+            printNormal(`Deleted tag '${deleteTagName}'`);
+        } catch (error) {
+            printError(`error: tag '${deleteTagName}' not found.`);
+        }
+        return;
+    }
+
+    const tagName = args.find(a => !a.startsWith('-'));
+    if (!tagName) {
+        printError('fatal: tag name required');
+        return;
+    }
     const hasMessage = args.includes('-m') || args.includes('-a');
     let message = '';
 
     if (hasMessage) {
         const msgIndex = args.indexOf('-m') !== -1 ? args.indexOf('-m') : args.indexOf('-a');
         message = args[msgIndex + 1] || '';
-    }
-
-    // Delete tag
-    if (args.includes('-d')) {
-        try {
-            await git.deleteTag({ fs, dir, ref: tagName });
-            printNormal(`Deleted tag '${tagName}'`);
-        } catch (error) {
-            printError(`error: tag '${tagName}' not found.`);
-        }
-        return;
     }
 
     // Create tag
@@ -3532,7 +4589,7 @@ async function gitShow(args) {
         const commit = await git.readCommit({ fs, dir, oid });
 
         // Print commit header
-        printNormal(`\\x1b[33mcommit ${oid}\\x1b[0m`);
+        printNormal(`\x1b[33mcommit ${oid}\x1b[0m`);
         printNormal(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
         printNormal(`Date:   ${new Date(commit.commit.author.timestamp * 1000).toString()}`);
         printNormal('');
@@ -3588,15 +4645,15 @@ async function gitShow(args) {
                     } else if (showStat) {
                         printNormal('---');
                         changes.forEach(c => {
-                            const statusColor = c.status === 'A' ? '\\x1b[32m' :
-                                c.status === 'D' ? '\\x1b[31m' : '\\x1b[33m';
-                            printNormal(` ${statusColor}${c.file}\\x1b[0m | ${c.type}`);
+                            const statusColor = c.status === 'A' ? '\x1b[32m' :
+                                c.status === 'D' ? '\x1b[31m' : '\x1b[33m';
+                            printNormal(` ${statusColor}${c.file}\x1b[0m | ${c.type}`);
                         });
                         printNormal(`${changes.length} file(s) changed`);
                     } else {
                         // Show actual diffs
                         for (const change of changes) {
-                            printNormal(`\\x1b[1mdiff --git a/${change.file} b/${change.file}\\x1b[0m`);
+                            printNormal(`\x1b[1mdiff --git a/${change.file} b/${change.file}\x1b[0m`);
 
                             if (change.status === 'A') {
                                 printNormal('--- /dev/null');
@@ -3605,7 +4662,7 @@ async function gitShow(args) {
                                     const { blob } = await git.readBlob({ fs, dir, oid: currentFiles[change.file] });
                                     const content = new TextDecoder().decode(blob);
                                     content.split('\n').forEach(line => {
-                                        term.writeln(`\\x1b[32m+${line}\\x1b[0m`);
+                                        term.writeln(`\x1b[32m+${line}\x1b[0m`);
                                     });
                                 } catch (e) { }
                             } else if (change.status === 'D') {
@@ -3615,7 +4672,7 @@ async function gitShow(args) {
                                     const { blob } = await git.readBlob({ fs, dir, oid: parentFiles[change.file] });
                                     const content = new TextDecoder().decode(blob);
                                     content.split('\n').forEach(line => {
-                                        term.writeln(`\\x1b[31m-${line}\\x1b[0m`);
+                                        term.writeln(`\x1b[31m-${line}\x1b[0m`);
                                     });
                                 } catch (e) { }
                             } else {
@@ -3633,8 +4690,8 @@ async function gitShow(args) {
                                         const oldLine = oldContent[i] || '';
                                         const newLine = newContent[i] || '';
                                         if (oldLine !== newLine) {
-                                            if (oldLine) term.writeln(`\\x1b[31m-${oldLine}\\x1b[0m`);
-                                            if (newLine) term.writeln(`\\x1b[32m+${newLine}\\x1b[0m`);
+                                            if (oldLine) term.writeln(`\x1b[31m-${oldLine}\x1b[0m`);
+                                            if (newLine) term.writeln(`\x1b[32m+${newLine}\x1b[0m`);
                                         }
                                     }
                                     if (maxLines > 20) {
@@ -3888,9 +4945,9 @@ async function gitStash(args) {
         printNormal('');
         entry.files.forEach(file => {
             if (file.deleted) {
-                printNormal(`  \\x1b[31mdeleted:  ${file.filepath}\\x1b[0m`);
+                printNormal(`  \x1b[31mdeleted:  ${file.filepath}\x1b[0m`);
             } else {
-                printNormal(`  \\x1b[33mmodified: ${file.filepath}\\x1b[0m`);
+                printNormal(`  \x1b[33mmodified: ${file.filepath}\x1b[0m`);
             }
         });
         return;
@@ -4055,28 +5112,63 @@ async function gitRevert(args) {
             return;
         }
 
-        // Get trees for both commits
-        const revertTree = await git.readTree({ fs, dir, oid: commitToRevert.commit.tree });
-        const parentTree = await git.readTree({ fs, dir, oid: (await git.readCommit({ fs, dir, oid: parentOid })).commit.tree });
+        // Get trees for the commit and its parent to compute inverse diff
+        const revertFiles = await flattenTree(dir, commitToRevert.commit.tree);
+        const parentFiles = await flattenTree(dir, (await git.readCommit({ fs, dir, oid: parentOid })).commit.tree);
 
-        // Simple revert: restore files from parent commit
-        // (Full 3-way merge revert is complex, this is a simplified version)
-        for (const entry of parentTree.tree) {
-            if (entry.type === 'blob') {
-                const { blob } = await git.readBlob({ fs, dir, oid: entry.oid });
-                const content = new TextDecoder().decode(blob);
-                await pfs.writeFile(`${dir}/${entry.path}`, content, 'utf8');
-                await git.add({ fs, dir, filepath: entry.path });
+        // Apply inverse diff: changes introduced in targetOid should be reversed
+        const allPaths = new Set([...Object.keys(revertFiles), ...Object.keys(parentFiles)]);
+        let changed = false;
+        for (const filepath of allPaths) {
+            const revertOidBlob = revertFiles[filepath];
+            const parentOidBlob = parentFiles[filepath];
+
+            if (revertOidBlob === parentOidBlob) continue; // No change in this file by the commit
+
+            changed = true;
+            if (revertOidBlob && !parentOidBlob) {
+                // File was added by the commit being reverted → delete it
+                try {
+                    await pfs.unlink(`${dir}/${filepath}`);
+                    await git.remove({ fs, dir, filepath });
+                } catch (e) { }
+            } else if (!revertOidBlob && parentOidBlob) {
+                // File was deleted by the commit being reverted → restore it
+                try {
+                    const { blob } = await git.readBlob({ fs, dir, oid: parentOidBlob });
+                    const content = new TextDecoder().decode(blob);
+                    const parts = filepath.split('/');
+                    if (parts.length > 1) {
+                        const dirPath = `${dir}/${parts.slice(0, -1).join('/')}`;
+                        try { await pfs.mkdir(dirPath, { recursive: true }); } catch (e) { }
+                    }
+                    await pfs.writeFile(`${dir}/${filepath}`, content, 'utf8');
+                    await git.add({ fs, dir, filepath });
+                } catch (e) { }
+            } else {
+                // File was modified by the commit being reverted → restore parent version
+                try {
+                    const { blob } = await git.readBlob({ fs, dir, oid: parentOidBlob });
+                    const content = new TextDecoder().decode(blob);
+                    await pfs.writeFile(`${dir}/${filepath}`, content, 'utf8');
+                    await git.add({ fs, dir, filepath });
+                } catch (e) { }
             }
+        }
+
+        if (!changed) {
+            printNormal('nothing to revert');
+            return;
         }
 
         // Create revert commit
         const revertMessage = `Revert "${commitToRevert.commit.message.split('\n')[0]}"\n\nThis reverts commit ${targetOid.substring(0, 7)}.`;
+        const author = await getAuthor(dir);
         const newOid = await git.commit({
             fs,
             dir,
             message: revertMessage,
-            author: { name: 'Student', email: 'student@example.com' }
+            author
         });
 
         const currentBranch = await git.currentBranch({ fs, dir }).catch(() => 'main') || 'main';
@@ -4268,30 +5360,86 @@ async function gitRebase(args) {
             return;
         }
 
-        // For a simple rebase, we can use merge as a fallback
-        // Real rebase replays commits on top of the target
+        // Replay commits from current branch on top of target branch
         printNormal(`Rebasing ${currentBranch} onto ${targetBranch}...`);
 
         try {
-            // Get commits to rebase (simplified)
-            const result = await git.merge({
-                fs,
-                dir,
-                ours: currentBranch,
-                theirs: targetBranch,
-                author: { name: 'Student', email: 'student@example.com' }
-            });
+            // Get the base (merge-base) between current and target
+            const targetOid = await git.resolveRef({ fs, dir, ref: targetBranch });
+            const currentOid = await git.resolveRef({ fs, dir, ref: currentBranch });
 
-            if (result && result.alreadyMerged) {
+            // Get commits on current branch
+            const allCommits = await git.log({ fs, dir, ref: currentBranch, depth: 100 });
+            const targetCommits = await git.log({ fs, dir, ref: targetBranch, depth: 100 });
+            const targetOids = new Set(targetCommits.map(c => c.oid));
+
+            // Find commits to replay (commits on current branch not in target)
+            const toReplay = [];
+            for (const commit of allCommits) {
+                if (targetOids.has(commit.oid)) break; // Reached common ancestor
+                toReplay.push(commit);
+            }
+            toReplay.reverse(); // Oldest first
+
+            if (toReplay.length === 0) {
                 printNormal(`Current branch ${currentBranch} is up to date.`);
-            } else {
-                printNormal(`Successfully rebased and updated refs/heads/${currentBranch}.`);
+                return;
             }
 
+            // Move branch pointer to target tip
+            await git.checkout({ fs, dir, ref: targetBranch, force: true });
+            // Re-create the branch at target tip
+            try { await git.deleteBranch({ fs, dir, ref: currentBranch }); } catch (e) { }
+            await git.branch({ fs, dir, ref: currentBranch, checkout: true });
+
+            // Replay each commit
+            const author = await getAuthor(dir);
+            for (const commit of toReplay) {
+                // Get tree contents for this commit and its parent
+                const parentOid = commit.commit.parent[0];
+                if (!parentOid) continue;
+
+                const commitFiles = await flattenTree(dir, commit.commit.tree);
+                const parentFiles = await flattenTree(dir, (await git.readCommit({ fs, dir, oid: parentOid })).commit.tree);
+
+                // Apply the diff
+                const allPaths = new Set([...Object.keys(commitFiles), ...Object.keys(parentFiles)]);
+                for (const filepath of allPaths) {
+                    if (commitFiles[filepath] === parentFiles[filepath]) continue;
+
+                    if (commitFiles[filepath] && !parentFiles[filepath]) {
+                        const { blob } = await git.readBlob({ fs, dir, oid: commitFiles[filepath] });
+                        const parts = filepath.split('/');
+                        if (parts.length > 1) {
+                            try { await pfs.mkdir(`${dir}/${parts.slice(0, -1).join('/')}`, { recursive: true }); } catch (e) { }
+                        }
+                        await pfs.writeFile(`${dir}/${filepath}`, new TextDecoder().decode(blob), 'utf8');
+                        await git.add({ fs, dir, filepath });
+                    } else if (!commitFiles[filepath] && parentFiles[filepath]) {
+                        try {
+                            await pfs.unlink(`${dir}/${filepath}`);
+                            await git.remove({ fs, dir, filepath });
+                        } catch (e) { }
+                    } else {
+                        const { blob } = await git.readBlob({ fs, dir, oid: commitFiles[filepath] });
+                        await pfs.writeFile(`${dir}/${filepath}`, new TextDecoder().decode(blob), 'utf8');
+                        await git.add({ fs, dir, filepath });
+                    }
+                }
+
+                await git.commit({
+                    fs,
+                    dir,
+                    message: commit.commit.message,
+                    author
+                });
+            }
+
+            printNormal(`Successfully rebased and updated refs/heads/${currentBranch}.`);
             printHint('Rebase replays your commits on top of the target branch');
             printHint('This creates a linear history without merge commits');
         } catch (error) {
-            if (error.code === 'MergeNotSupportedError') {
+            if (error.code === 'MergeNotSupportedError' || error.message?.includes('conflict')) {
                 printError('CONFLICT: Merge conflict during rebase');
                 printNormal('Resolve conflicts and use "git rebase --continue"');
                 printNormal('Or use "git rebase --abort" to cancel');
@@ -4332,7 +5480,7 @@ async function gitReflog(args) {
                 action = `commit: ${message}`;
             }
 
-            term.writeln(`\\x1b[33m${shortOid}\\x1b[0m HEAD@{${index}}: ${action}`);
+            term.writeln(`\x1b[33m${shortOid}\x1b[0m HEAD@{${index}}: ${action}`);
         });
 
         printNormal('');
@@ -4500,30 +5648,56 @@ async function gitCherryPick(args) {
             return;
         }
 
-        // Get the tree of the commit and its parent
-        const pickTree = await git.readTree({ fs, dir, oid: commitToPick.commit.tree });
+        // Get trees for both the commit and its parent to compute the diff
+        const parentFiles = await flattenTree(dir, (await git.readCommit({ fs, dir, oid: parentOid })).commit.tree);
+        const pickFiles = await flattenTree(dir, commitToPick.commit.tree);
 
-        // Apply changes from the picked commit
-        // (Simplified: copy files from the picked commit's tree)
-        for (const entry of pickTree.tree) {
-            if (entry.type === 'blob') {
+        // Apply only the changed files (diff between parent and cherry-picked commit)
+        const allPaths = new Set([...Object.keys(parentFiles), ...Object.keys(pickFiles)]);
+        for (const filepath of allPaths) {
+            const parentOidBlob = parentFiles[filepath];
+            const pickOidBlob = pickFiles[filepath];
+
+            if (parentOidBlob === pickOidBlob) continue; // No change in this file
+
+            if (pickOidBlob && !parentOidBlob) {
+                // File was added in the picked commit
                 try {
-                    const { blob } = await git.readBlob({ fs, dir, oid: entry.oid });
+                    const { blob } = await git.readBlob({ fs, dir, oid: pickOidBlob });
                     const content = new TextDecoder().decode(blob);
-                    await pfs.writeFile(`${dir}/${entry.path}`, content, 'utf8');
-                    await git.add({ fs, dir, filepath: entry.path });
-                } catch (e) {
-                    // Skip files that can't be read
-                }
+                    // Ensure parent directories exist
+                    const parts = filepath.split('/');
+                    if (parts.length > 1) {
+                        const dirPath = `${dir}/${parts.slice(0, -1).join('/')}`;
+                        try { await pfs.mkdir(dirPath, { recursive: true }); } catch (e) { }
+                    }
+                    await pfs.writeFile(`${dir}/${filepath}`, content, 'utf8');
+                    await git.add({ fs, dir, filepath });
+                } catch (e) { }
+            } else if (!pickOidBlob && parentOidBlob) {
+                // File was deleted in the picked commit
+                try {
+                    await pfs.unlink(`${dir}/${filepath}`);
+                    await git.remove({ fs, dir, filepath });
+                } catch (e) { }
+            } else {
+                // File was modified in the picked commit
+                try {
+                    const { blob } = await git.readBlob({ fs, dir, oid: pickOidBlob });
+                    const content = new TextDecoder().decode(blob);
+                    await pfs.writeFile(`${dir}/${filepath}`, content, 'utf8');
+                    await git.add({ fs, dir, filepath });
+                } catch (e) { }
             }
         }
 
         // Create new commit with the cherry-picked changes
+        const author = await getAuthor(dir);
         const newOid = await git.commit({
             fs,
             dir,
             message: commitToPick.commit.message,
-            author: { name: 'Student', email: 'student@example.com' }
+            author
         });
 
         const currentBranch = await git.currentBranch({ fs, dir }).catch(() => 'main') || 'main';
@@ -4642,11 +5816,11 @@ async function gitBlame(args) {
                 const author = commit.commit.author.name.substring(0, maxAuthor).padEnd(maxAuthor);
                 const date = new Date(commit.commit.author.timestamp * 1000);
                 const dateStr = date.toISOString().slice(0, 10);
-                term.writeln(`\\x1b[33m${shortOid}\\x1b[0m (${author} ${dateStr} ${lineNum}) ${line}`);
+                term.writeln(`\x1b[33m${shortOid}\x1b[0m (${author} ${dateStr} ${lineNum}) ${line}`);
             } else {
                 const oid = '00000000';
                 const author = 'Unknown'.padEnd(maxAuthor);
-                term.writeln(`\\x1b[33m${oid}\\x1b[0m (${author}            ${lineNum}) ${line}`);
+                term.writeln(`\x1b[33m${oid}\x1b[0m (${author}            ${lineNum}) ${line}`);
             }
         });
 
@@ -4907,7 +6081,7 @@ async function handleTabCompletion() {
 
     // Command completion (if it's the first word)
     if (parts.length === 1) {
-        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'echo', 'clear', 'reset', 'history', 'grep', 'vi', 'vim', 'nano', 'edit', 'git'];
+        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'clear', 'reset', 'history', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'whoami', 'hostname', 'date', 'env', 'printenv', 'export', 'vi', 'vim', 'nano', 'edit', 'git'];
         const matches = commands.filter(cmd => cmd.startsWith(lastPart));
 
         if (matches.length === 1) {
@@ -4936,7 +6110,7 @@ async function handleTabCompletion() {
 
     // Git subcommand completion
     if (parts.length === 2 && parts[0] === 'git') {
-        const gitCommands = ['init', 'status', 'add', 'commit', 'log', 'branch', 'checkout', 'diff', 'reset', 'rm', 'mv', 'merge', 'tag', 'show', 'fetch', 'stash', 'config', 'clone', 'push', 'pull', 'remote'];
+        const gitCommands = ['init', 'status', 'add', 'commit', 'log', 'branch', 'checkout', 'diff', 'reset', 'rm', 'mv', 'merge', 'tag', 'show', 'fetch', 'stash', 'config', 'clone', 'push', 'pull', 'remote', 'rebase', 'cherry-pick', 'revert', 'reflog', 'blame'];
         const matches = gitCommands.filter(cmd => cmd.startsWith(lastPart));
 
         if (matches.length === 1) {
@@ -4945,7 +6119,6 @@ async function handleTabCompletion() {
             cursorPos = currentLine.length;
             term.write(completion + ' ');
         } else if (matches.length > 1) {
-            // Find common prefix and auto-complete it
             const commonPrefix = getCommonPrefix(matches);
             if (commonPrefix.length > lastPart.length) {
                 const completion = commonPrefix.substring(lastPart.length);
@@ -4953,7 +6126,6 @@ async function handleTabCompletion() {
                 cursorPos = currentLine.length;
                 term.write(completion);
             } else {
-                // No additional common prefix, show all matches
                 term.write('\r\n');
                 term.writeln(matches.join('  '));
                 showPromptInline();
@@ -4961,6 +6133,39 @@ async function handleTabCompletion() {
             }
         }
         return;
+    }
+
+    // Branch name completion for git commands that take branch arguments
+    const branchCommands = ['checkout', 'merge', 'rebase', 'branch', 'switch'];
+    if (parts[0] === 'git' && parts.length >= 3 && branchCommands.includes(parts[1])) {
+        try {
+            const dir = await git.findRoot({ fs, filepath: currentDir });
+            const branches = await git.listBranches({ fs, dir });
+            const matches = branches.filter(b => b.startsWith(lastPart));
+
+            if (matches.length === 1) {
+                const completion = matches[0].substring(lastPart.length);
+                currentLine += completion + ' ';
+                cursorPos = currentLine.length;
+                term.write(completion + ' ');
+            } else if (matches.length > 1) {
+                const commonPrefix = getCommonPrefix(matches);
+                if (commonPrefix.length > lastPart.length) {
+                    const completion = commonPrefix.substring(lastPart.length);
+                    currentLine += completion;
+                    cursorPos = currentLine.length;
+                    term.write(completion);
+                } else {
+                    term.write('\r\n');
+                    term.writeln(matches.join('  '));
+                    showPromptInline();
+                    term.write(currentLine);
+                }
+            }
+            return;
+        } catch (e) {
+            // Not in a git repo, fall through to file completion
+        }
     }
 
     // File/directory completion
