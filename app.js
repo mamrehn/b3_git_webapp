@@ -97,6 +97,9 @@ let codeMirrorInstance = null;
 let isCommitMessageMode = false;
 let commitMessageDir = null;
 let commitMessageIsAmend = false;
+let promptBranch = '';
+let previousDir = '/home/student';
+let hintsEnabled = true;
 
 // Reverse search state
 let reverseSearchMode = false;
@@ -122,7 +125,7 @@ const envVars = {
     TERM: 'xterm-256color',
     LANG: 'en_US.UTF-8',
     PATH: '/usr/local/bin:/usr/bin:/bin',
-    HOSTNAME: 'git-learning-terminal',
+    HOSTNAME: 'gitlearning',
     EDITOR: 'vi'
 };
 
@@ -132,6 +135,191 @@ const MAX_UNDO_HISTORY = 50;
 
 // Quoted insert mode (Ctrl+V)
 let quotedInsertMode = false;
+
+// Shell-like tokenizer: handles "double quotes", 'single quotes', backslash escaping
+function tokenize(input) {
+    const tokens = [];
+    let current = '';
+    let inSingle = false;
+    let inDouble = false;
+    let i = 0;
+    while (i < input.length) {
+        const char = input[i];
+        if (inSingle) {
+            if (char === "'") inSingle = false;
+            else current += char;
+            i++; continue;
+        }
+        if (inDouble) {
+            if (char === '"') inDouble = false;
+            else if (char === '\\' && i + 1 < input.length && '"\\$`'.includes(input[i + 1])) {
+                current += input[i + 1]; i += 2; continue;
+            } else current += char;
+            i++; continue;
+        }
+        if (char === '\\' && i + 1 < input.length) { current += input[i + 1]; i += 2; continue; }
+        if (char === "'") { inSingle = true; i++; continue; }
+        if (char === '"') { inDouble = true; i++; continue; }
+        if (char === ' ' || char === '\t') {
+            if (current !== '') { tokens.push(current); current = ''; }
+            i++; continue;
+        }
+        current += char;
+        i++;
+    }
+    if (current !== '') tokens.push(current);
+    return tokens;
+}
+
+// Split on shell operators (&&, ||) respecting quotes
+function splitOnShellOperators(input) {
+    const parts = [];
+    let current = '';
+    let inSingle = false, inDouble = false;
+    let i = 0;
+    while (i < input.length) {
+        const char = input[i];
+        if (inSingle) { current += char; if (char === "'") inSingle = false; i++; continue; }
+        if (inDouble) { current += char; if (char === '"') inDouble = false; i++; continue; }
+        if (char === "'") { inSingle = true; current += char; i++; continue; }
+        if (char === '"') { inDouble = true; current += char; i++; continue; }
+        if (char === '\\' && i + 1 < input.length) { current += char + input[i + 1]; i += 2; continue; }
+        if (char === '&' && input[i + 1] === '&') {
+            parts.push(current.trim()); parts.push('&&'); current = ''; i += 2; continue;
+        }
+        if (char === '|' && input[i + 1] === '|') {
+            parts.push(current.trim()); parts.push('||'); current = ''; i += 2; continue;
+        }
+        current += char; i++;
+    }
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+}
+
+// Split on pipe (|) but not || respecting quotes
+function splitOnPipe(input) {
+    const parts = [];
+    let current = '';
+    let inSingle = false, inDouble = false;
+    let i = 0;
+    while (i < input.length) {
+        const char = input[i];
+        if (inSingle) { current += char; if (char === "'") inSingle = false; i++; continue; }
+        if (inDouble) { current += char; if (char === '"') inDouble = false; i++; continue; }
+        if (char === "'") { inSingle = true; current += char; i++; continue; }
+        if (char === '"') { inDouble = true; current += char; i++; continue; }
+        if (char === '|' && input[i + 1] !== '|') {
+            parts.push(current.trim()); current = ''; i++; continue;
+        }
+        if (char === '|' && input[i + 1] === '|') {
+            current += '||'; i += 2; continue;
+        }
+        current += char; i++;
+    }
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+}
+
+// Parse output redirect (> or >>) outside quotes
+function parseRedirect(cmd) {
+    let inSingle = false, inDouble = false;
+    for (let i = 0; i < cmd.length; i++) {
+        const char = cmd[i];
+        if (inSingle) { if (char === "'") inSingle = false; continue; }
+        if (inDouble) { if (char === '"') inDouble = false; continue; }
+        if (char === "'") { inSingle = true; continue; }
+        if (char === '"') { inDouble = true; continue; }
+        if (char === '>') {
+            const isAppend = cmd[i + 1] === '>';
+            const fileStart = isAppend ? i + 2 : i + 1;
+            return { command: cmd.substring(0, i).trim(), redirectFile: cmd.substring(fileStart).trim(), isAppend };
+        }
+    }
+    return { command: cmd, redirectFile: null, isAppend: false };
+}
+
+// Expand glob patterns in arguments
+async function expandGlobs(args) {
+    const expanded = [];
+    for (const arg of args) {
+        if (arg.includes('*') || arg.includes('?')) {
+            try {
+                const hasPath = arg.includes('/');
+                const dir = hasPath ? resolvePath(arg.substring(0, arg.lastIndexOf('/'))) : currentDir;
+                const pattern = hasPath ? arg.substring(arg.lastIndexOf('/') + 1) : arg;
+                const regex = new RegExp('^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+                const files = await pfs.readdir(dir);
+                const matches = files.filter(f => regex.test(f)).sort();
+                if (matches.length > 0) {
+                    const prefix = hasPath ? arg.substring(0, arg.lastIndexOf('/') + 1) : '';
+                    expanded.push(...matches.map(m => prefix + m));
+                } else {
+                    expanded.push(arg);
+                }
+            } catch (e) {
+                expanded.push(arg);
+            }
+        } else {
+            expanded.push(arg);
+        }
+    }
+    return expanded;
+}
+
+// Format git date consistently (matches real git output)
+function formatGitDate(timestamp) {
+    const date = new Date(timestamp * 1000);
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const tzOffset = -date.getTimezoneOffset();
+    const tzSign = tzOffset >= 0 ? '+' : '-';
+    const tzH = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, '0');
+    const tzM = String(Math.abs(tzOffset) % 60).padStart(2, '0');
+    return `${days[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')} ${date.getFullYear()} ${tzSign}${tzH}${tzM}`;
+}
+
+// History expansion: !!, !n, !-n, !string
+function expandHistory(cmd) {
+    if (cmd === '!!') {
+        if (commandHistory.length === 0) return cmd;
+        const expanded = commandHistory[commandHistory.length - 1];
+        printNormal(expanded);
+        return expanded;
+    }
+    if (cmd.startsWith('!') && cmd.length > 1 && cmd[1] !== ' ' && cmd[1] !== '=') {
+        const rest = cmd.substring(1);
+        if (rest.startsWith('-')) {
+            const n = parseInt(rest.substring(1), 10);
+            if (!isNaN(n) && n > 0 && n <= commandHistory.length) {
+                const expanded = commandHistory[commandHistory.length - n];
+                printNormal(expanded);
+                return expanded;
+            }
+        } else if (/^\d+$/.test(rest)) {
+            const n = parseInt(rest, 10);
+            if (n > 0 && n <= commandHistory.length) {
+                const expanded = commandHistory[n - 1];
+                printNormal(expanded);
+                return expanded;
+            }
+        } else {
+            for (let i = commandHistory.length - 1; i >= 0; i--) {
+                if (commandHistory[i].startsWith(rest)) {
+                    const expanded = commandHistory[i];
+                    printNormal(expanded);
+                    return expanded;
+                }
+            }
+        }
+    }
+    // Replace !! within the command (e.g., "sudo !!")
+    if (cmd.includes('!!') && commandHistory.length > 0) {
+        const expanded = cmd.replace(/!!/g, commandHistory[commandHistory.length - 1]);
+        printNormal(expanded);
+        return expanded;
+    }
+    return cmd;
+}
 
 // Initialize the application
 async function init() {
@@ -179,7 +367,7 @@ async function init() {
         await updateFileTree();
 
     } catch (error) {
-        term.writeln(`\r\n\x1b[31mError initializing: ${error.message}\x1b[0m`);
+        term.writeln(`\x1b[31mError initializing: ${error.message}\x1b[0m`);
     }
 }
 
@@ -399,24 +587,27 @@ async function setupProject2() {
 }
 
 function printWelcome() {
-    term.writeln('\r\n\x1b[36m╔════════════════════════════════════════════════════════════╗\x1b[0m');
+    term.writeln('\x1b[36m╔════════════════════════════════════════════════════════════╗\x1b[0m');
     term.writeln('\x1b[36m║        Welcome to the Git Learning Terminal!               ║\x1b[0m');
     term.writeln('\x1b[36m╚════════════════════════════════════════════════════════════╝\x1b[0m');
-    term.writeln('\r\n\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: This is a safe learning environment. Try any git command!\x1b[0m');
-    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: Type "help" for available commands.\x1b[0m');
-    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: Edit files using "edit <filename>" or "vi <filename>".\x1b[0m');
-    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: project1 is cloned from GitHub (mamrehn/project1)\x1b[0m');
-    term.writeln('\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: project2 is empty - You can initialize it with "git init"\x1b[0m\r\n');
+    term.writeln('');
+    term.writeln('\x1b[1;94m💡 This is a safe learning environment. Try any git command!\x1b[0m');
+    term.writeln('\x1b[1;94m💡 Type "help" for available commands.\x1b[0m');
+    term.writeln('\x1b[1;94m💡 Type "hints off" to disable educational hints.\x1b[0m');
+    term.writeln('\x1b[1;94m💡 project1 is cloned from GitHub | project2 is empty for practice\x1b[0m');
+    term.writeln('');
 }
 
 function showPrompt() {
     const dir = currentDir.replace('/home/student', '~');
-    term.write(`\r\n\x1b[36mme@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m$ `);
+    const branch = promptBranch ? ` \x1b[33m(${promptBranch})\x1b[0m` : '';
+    term.write(`\x1b[32mstudent@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m${branch}$ `);
 }
 
 function showPromptInline() {
     const dir = currentDir.replace('/home/student', '~');
-    term.write(`\x1b[36mme@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m$ `);
+    const branch = promptBranch ? ` \x1b[33m(${promptBranch})\x1b[0m` : '';
+    term.write(`\x1b[32mstudent@gitlearning\x1b[0m:\x1b[34m${dir}\x1b[0m${branch}$ `);
 }
 
 // Helper functions
@@ -510,23 +701,22 @@ async function flattenTree(dir, treeOid, prefix = '') {
 }
 
 function printNormal(text) {
-    term.writeln(`\r\n${text}`);
+    term.writeln(text);
 }
 
 function printHint(text) {
-    // Use bright blue (1;94m) for hints - stands out and doesn't conflict with git colors
-    // No leading newline - hints should be grouped together
+    if (!hintsEnabled) return;
     term.writeln(`\x1b[1;94m💡 \x1b[0m\x1b[1;94mHint: ${text}\x1b[0m`);
 }
 
 function printError(text) {
-    term.writeln(`\r\n\x1b[31m${text}\x1b[0m`);
+    term.writeln(`\x1b[31m${text}\x1b[0m`);
 }
 
 // Pipe handling
 async function processPipedCommands(fullCommand) {
     try {
-        const commands = fullCommand.split('|').map(c => c.trim());
+        const commands = splitOnPipe(fullCommand);
         let output = '';
 
         // Capture output from first command by temporarily intercepting term.writeln
@@ -539,13 +729,10 @@ async function processPipedCommands(fullCommand) {
             capturing = true;
             capturedLines = [];
             term.writeln = (text) => {
-                // Strip \r\n prefix and ANSI codes for piping
-                const clean = text.replace(/^\r?\n/, '');
-                if (clean !== '') capturedLines.push(clean);
+                if (text !== '') capturedLines.push(text);
             };
             term.write = (text) => {
-                const clean = text.replace(/^\r?\n/, '');
-                if (clean !== '') capturedLines.push(clean);
+                if (text !== '') capturedLines.push(text);
             };
         }
 
@@ -558,7 +745,7 @@ async function processPipedCommands(fullCommand) {
 
         // Execute first command and capture output
         const firstCmd = commands[0];
-        const firstParts = firstCmd.split(/\s+/);
+        const firstParts = tokenize(firstCmd);
         const firstCommand = firstParts[0];
         const firstArgs = firstParts.slice(1);
 
@@ -620,7 +807,7 @@ async function processPipedCommands(fullCommand) {
         // Process remaining commands in the pipe
         for (let i = 1; i < commands.length; i++) {
             const pipeCmd = commands[i];
-            const pipeParts = pipeCmd.split(/\s+/);
+            const pipeParts = tokenize(pipeCmd);
             const pipeCommand = pipeParts[0];
             const pipeArgs = pipeParts.slice(1);
 
@@ -689,7 +876,6 @@ async function processPipedCommands(fullCommand) {
 
         // Print final output
         if (output) {
-            printNormal('');
             output.split('\n').forEach(line => term.writeln(line));
         }
     } catch (error) {
@@ -735,33 +921,34 @@ async function processCommand(cmd) {
     // Expand environment variables ($VAR, ${VAR})
     trimmedCmd = expandEnvVars(trimmedCmd);
 
-    // Add to history
+    // History expansion: !!, !n, !-n, !string
+    trimmedCmd = expandHistory(trimmedCmd);
+
+    // Add to history (after expansion)
     commandHistory.push(trimmedCmd);
     historyIndex = commandHistory.length;
 
-    // Handle && and || chaining
-    // Split on && and || while preserving the operator
-    if (trimmedCmd.includes('&&') || trimmedCmd.includes('||')) {
-        const parts = trimmedCmd.split(/(&&|\|\|)/).map(c => c.trim()).filter(c => c);
+    // Handle && and || chaining (quote-aware)
+    const chainParts = splitOnShellOperators(trimmedCmd);
+    if (chainParts.length > 1) {
         let lastSuccess = true;
-        for (let i = 0; i < parts.length; i++) {
-            if (parts[i] === '&&') {
-                if (!lastSuccess) break; // Skip rest after failure
+        for (let i = 0; i < chainParts.length; i++) {
+            if (chainParts[i] === '&&') {
+                if (!lastSuccess) break;
                 continue;
             }
-            if (parts[i] === '||') {
+            if (chainParts[i] === '||') {
                 if (lastSuccess) {
-                    // Skip the next command since the previous succeeded
                     i++;
                     continue;
                 }
                 continue;
             }
             try {
-                await executeSingleCommand(parts[i]);
+                await executeSingleCommand(chainParts[i]);
                 lastSuccess = true;
             } catch (error) {
-                printError(`Error: ${error.message}`);
+                printError(`${error.message}`);
                 lastSuccess = false;
             }
         }
@@ -786,15 +973,60 @@ function expandEnvVars(str) {
 }
 
 async function executeSingleCommand(trimmedCmd) {
-    // Handle pipes
-    if (trimmedCmd.includes('|')) {
+    // Handle pipes (quote-aware)
+    const pipeParts = splitOnPipe(trimmedCmd);
+    if (pipeParts.length > 1) {
         await processPipedCommands(trimmedCmd);
         return;
     }
 
-    const parts = trimmedCmd.split(/\s+/);
+    // Handle output redirect for non-echo commands
+    const { command: cmdWithoutRedirect, redirectFile, isAppend } = parseRedirect(trimmedCmd);
+    if (redirectFile) {
+        const cmdName = tokenize(cmdWithoutRedirect)[0];
+        if (cmdName !== 'echo') {
+            // Capture output and write to file
+            const capturedOutput = [];
+            const origWriteln = term.writeln.bind(term);
+            const origWrite = term.write.bind(term);
+            term.writeln = (text) => capturedOutput.push(text);
+            term.write = (text) => capturedOutput.push(text);
+            try {
+                await executeDispatch(cmdWithoutRedirect);
+            } finally {
+                term.writeln = origWriteln;
+                term.write = origWrite;
+            }
+            const filepath = resolvePath(redirectFile);
+            const content = capturedOutput.join('\n').replace(/\x1b\[[0-9;]*m/g, '') + '\n';
+            try {
+                if (isAppend) {
+                    let existing = '';
+                    try { existing = await pfs.readFile(filepath, 'utf8'); } catch (e) {}
+                    await pfs.writeFile(filepath, existing + content, 'utf8');
+                } else {
+                    await pfs.writeFile(filepath, content, 'utf8');
+                }
+            } catch (error) {
+                printError(`redirect: ${error.message}`);
+            }
+            return;
+        }
+    }
+
+    await executeDispatch(trimmedCmd);
+}
+
+async function executeDispatch(trimmedCmd) {
+    const parts = tokenize(trimmedCmd);
     const command = parts[0];
-    const args = parts.slice(1);
+    let args = parts.slice(1);
+
+    // Expand globs for file-operating commands
+    const globCommands = ['ls', 'cat', 'rm', 'cp', 'mv', 'head', 'tail', 'wc', 'grep', 'touch', 'git'];
+    if (globCommands.includes(command)) {
+        args = await expandGlobs(args);
+    }
 
     try {
         switch (command) {
@@ -866,12 +1098,15 @@ async function executeSingleCommand(trimmedCmd) {
                 break;
             case 'whoami':
                 printNormal('student');
+                printHint('Prints the current username. In real systems, this shows who is logged in.');
                 break;
             case 'hostname':
-                printNormal('git-learning-terminal');
+                printNormal('gitlearning');
+                printHint('Prints the system hostname. Used to identify the machine on a network.');
                 break;
             case 'date':
                 printNormal(new Date().toString());
+                printHint('Prints the current date and time. Use "date +%Y-%m-%d" for custom formats in real bash.');
                 break;
             case 'find':
                 await cmdFind(args);
@@ -886,15 +1121,47 @@ async function executeSingleCommand(trimmedCmd) {
             case 'export':
                 cmdExport(args, trimmedCmd);
                 break;
+            case 'which':
+                cmdWhich(args);
+                break;
+            case 'type':
+                cmdType(args);
+                break;
+            case 'hints':
+                cmdHints(args);
+                break;
+            case 'sort':
+                await cmdSort(args);
+                break;
+            case 'uniq':
+                await cmdUniq(args);
+                break;
+            case 'true':
+                break;
+            case 'false':
+                throw new Error('false');
             case 'git':
                 await cmdGit(args);
                 break;
+            case 'source':
+            case '.':
+                printError(`${command}: not supported in this environment`);
+                printHint('In real bash, "source" runs commands from a file in the current shell.');
+                break;
+            case 'man':
+                printError(`No manual entry for ${args[0] || 'unknown'}`);
+                printHint('Use "help" to see available commands, or "<command> --help" for specific usage.');
+                break;
+            case 'sudo':
+                printError('sudo: command not found (not needed in this sandbox)');
+                printHint('This is a safe sandbox. All operations run as your user. No sudo needed!');
+                break;
             default:
-                printError(`Command not found: ${command}`);
-                printHint(`Type "help" to see available commands.`);
+                printError(`${command}: command not found`);
+                printHint('Type "help" to see available commands.');
         }
     } catch (error) {
-        printError(`Error: ${error.message}`);
+        printError(`${error.message}`);
     }
 }
 
@@ -1015,7 +1282,7 @@ async function cmdHelp() {
     printNormal('\x1b[36mFile System Commands:\x1b[0m');
     printNormal('  ls [options]          - List directory contents (-l, -a, -la)');
     printNormal('  ll                    - List all files (alias for ls -la)');
-    printNormal('  cd <directory>        - Change directory');
+    printNormal('  cd <directory>        - Change directory (supports -, ~, ..)');
     printNormal('  pwd                   - Print working directory');
     printNormal('  cat <file> [file2...] - Display file contents');
     printNormal('  mkdir [-p] <dir>      - Create directory (-p for parents)');
@@ -1030,23 +1297,34 @@ async function cmdHelp() {
     printNormal('  grep [opts] PAT file  - Search for pattern (-i, -n, -v, -c, -r)');
     printNormal('  find [dir] -name PAT  - Find files by name pattern');
     printNormal('  diff <file1> <file2>  - Compare two files');
+    printNormal('  sort [-rnU] <file>    - Sort lines of a file');
+    printNormal('  uniq [-cd] <file>     - Filter adjacent duplicate lines');
     printNormal('  vi/vim/nano <file>    - Edit file');
+    printNormal('');
+    printNormal('\x1b[36mSystem Commands:\x1b[0m');
     printNormal('  whoami                - Print current user');
     printNormal('  hostname              - Print hostname');
     printNormal('  date                  - Print current date/time');
     printNormal('  env / printenv        - Print environment variables');
     printNormal('  export KEY=VALUE      - Set environment variable');
+    printNormal('  which <command>       - Locate a command');
+    printNormal('  type <command>        - Show command type (builtin/external)');
     printNormal('  clear                 - Clear terminal');
     printNormal('  reset                 - Reset filesystem to initial state');
     printNormal('  history               - Show command history');
+    printNormal('  hints [on|off]        - Toggle educational hints');
     printNormal('');
     printNormal('\x1b[36mShell Features:\x1b[0m');
     printNormal('  <cmd> && <cmd>        - Chain commands (stops on error)');
     printNormal('  <cmd> || <cmd>        - Chain commands (runs on failure)');
     printNormal('  <cmd> | <cmd>         - Pipe output (grep, head, tail, wc, sort, uniq)');
-    printNormal('  echo "text" > file    - Write text to file');
-    printNormal('  echo "text" >> file   - Append text to file');
+    printNormal('  <cmd> > file          - Redirect output to file (any command)');
+    printNormal('  <cmd> >> file         - Append output to file');
+    printNormal('  "quoted args"         - Arguments with spaces');
     printNormal('  $VAR / ${VAR}         - Environment variable expansion');
+    printNormal('  !!                    - Repeat last command');
+    printNormal('  !n / !-n / !string    - History expansion');
+    printNormal('  *.txt                 - Glob pattern expansion');
     printNormal('  Ctrl+R                - Reverse history search');
     printNormal('  Tab                   - Auto-complete commands/files/branches');
     printNormal('  ↑/↓                   - Navigate command history');
@@ -1116,7 +1394,6 @@ async function cmdLs(args) {
         }
 
         if (isFile) {
-            term.writeln('');
             if (longFormat) {
                 const size = fileStat.size || 0;
                 const mtime = fileStat.mtimeMs ? new Date(fileStat.mtimeMs) : new Date();
@@ -1149,8 +1426,6 @@ async function cmdLs(args) {
             return;
         }
 
-        term.writeln('');
-
         if (longFormat) {
             // Calculate total blocks (simplified)
             const totalSize = filtered.reduce((sum, f) => sum + (f.size || 0), 0);
@@ -1174,21 +1449,35 @@ async function cmdLs(args) {
                 term.writeln(`${perms}  1 student student ${size} ${dateStr} ${color}${file.name}${suffix}\x1b[0m`);
             });
         } else {
-            filtered.forEach(file => {
+            // Multi-column layout (like real ls)
+            const items = filtered.map(file => {
                 let color = '\x1b[0m';
                 let suffix = '';
-
-                if (file.isDirectory) {
-                    color = '\x1b[34m';
-                    suffix = '/';
-                }
-
-                if (file.isHidden) {
-                    color = '\x1b[90m'; // Grey for hidden
-                }
-
-                term.writeln(`${color}${file.name}${suffix}\x1b[0m`);
+                if (file.isDirectory) { color = '\x1b[34m'; suffix = '/'; }
+                if (file.isHidden) { color = '\x1b[90m'; }
+                return { display: `${color}${file.name}${suffix}\x1b[0m`, length: file.name.length + (file.isDirectory ? 1 : 0) };
             });
+
+            // Calculate column width based on longest name + padding
+            const maxLen = Math.max(...items.map(i => i.length));
+            const colWidth = maxLen + 2;
+            const termWidth = 80;
+            const numCols = Math.max(1, Math.floor(termWidth / colWidth));
+
+            let line = '';
+            let col = 0;
+            for (const item of items) {
+                line += item.display + ' '.repeat(Math.max(1, colWidth - item.length));
+                col++;
+                if (col >= numCols) {
+                    term.writeln(line.trimEnd());
+                    line = '';
+                    col = 0;
+                }
+            }
+            if (line) {
+                term.writeln(line.trimEnd());
+            }
         }
 
         // Add spacing before hint (only for current dir if there are hidden files)
@@ -1202,34 +1491,38 @@ async function cmdLs(args) {
 
 async function cmdCd(args) {
     if (args.length === 0) {
+        previousDir = currentDir;
         currentDir = '/home/student';
         await updateFileTree();
+        printHint('cd without arguments goes to your home directory (~).');
         return;
     }
 
     let newDir = args[0];
 
-    // Handle current directory
-    if (newDir === '.') {
-        // Stay in current directory, just update the file tree
-        await updateFileTree();
+    // Handle cd - (go to previous directory)
+    if (newDir === '-') {
+        if (previousDir) {
+            const tmp = currentDir;
+            currentDir = previousDir;
+            previousDir = tmp;
+            printNormal(currentDir.replace('/home/student', '~'));
+            await updateFileTree();
+        } else {
+            printError('-bash: cd: OLDPWD not set');
+        }
         return;
     }
 
-    // Handle parent directory
-    if (newDir === '..') {
-        const parts = currentDir.split('/').filter(p => p);
-        if (parts.length > 0) {
-            parts.pop();
-            currentDir = '/' + parts.join('/');
-            if (currentDir === '/home') currentDir = '/home/student'; // Don't go above home
-        }
+    // Handle current directory
+    if (newDir === '.') {
         await updateFileTree();
         return;
     }
 
     // Handle home directory
     if (newDir === '~') {
+        previousDir = currentDir;
         currentDir = '/home/student';
         await updateFileTree();
         return;
@@ -1238,14 +1531,17 @@ async function cmdCd(args) {
     // Resolve the path (handles ., .., relative paths)
     newDir = resolvePath(newDir);
 
-    // Don't allow going above /home/student
-    if (!newDir.startsWith('/home/student')) {
-        newDir = '/home/student';
+    // Restrict navigation to /home tree (sandbox)
+    if (!newDir.startsWith('/home')) {
+        printError('-bash: cd: restricted: cannot navigate above /home');
+        printHint('This sandbox restricts navigation to the /home directory tree.');
+        return;
     }
 
     try {
         const stats = await pfs.stat(newDir);
         if (stats.isDirectory()) {
+            previousDir = currentDir;
             currentDir = newDir;
             // Update current project if in a project directory
             if (currentDir.includes('/project1')) {
@@ -1255,10 +1551,10 @@ async function cmdCd(args) {
             }
             await updateFileTree();
         } else {
-            printError(`cd: not a directory: ${args[0]}`);
+            printError(`-bash: cd: ${args[0]}: Not a directory`);
         }
     } catch (error) {
-        printError(`cd: no such file or directory: ${args[0]}`);
+        printError(`-bash: cd: ${args[0]}: No such file or directory`);
     }
 }
 
@@ -1278,7 +1574,6 @@ async function cmdCat(args) {
 
         try {
             const content = await pfs.readFile(filepath, 'utf8');
-            term.writeln('');
             content.split('\n').forEach(line => {
                 term.writeln(line);
             });
@@ -1333,7 +1628,7 @@ async function cmdTouch(args) {
     }
 
     for (const filename of args) {
-        const filepath = filename.startsWith('/') ? filename : `${currentDir}/${filename}`;
+        const filepath = resolvePath(filename);
 
         try {
             // Only create the file if it doesn't already exist (real touch updates mtime)
@@ -1624,7 +1919,7 @@ async function cmdGrep(args) {
                 const prefix = multiFile ? `${displayName}:` : '';
                 printNormal(`${prefix}${matchCount}`);
             } else {
-                results.forEach(r => term.writeln(`\r\n${r}`));
+                results.forEach(r => term.writeln(r));
             }
         } catch (e) {
             // Skip non-readable files
@@ -1692,7 +1987,7 @@ async function cmdHead(args) {
             const content = await pfs.readFile(resolvePath(file), 'utf8');
             if (files.length > 1) printNormal(`==> ${file} <==`);
             const allLines = content.split('\n');
-            allLines.slice(0, lines).forEach(l => term.writeln(`\r\n${l}`));
+            allLines.slice(0, lines).forEach(l => term.writeln(l));
         } catch (e) {
             printError(`head: cannot open '${file}': No such file or directory`);
         }
@@ -1722,7 +2017,7 @@ async function cmdTail(args) {
             const content = await pfs.readFile(resolvePath(file), 'utf8');
             if (files.length > 1) printNormal(`==> ${file} <==`);
             const allLines = content.split('\n');
-            allLines.slice(-lines).forEach(l => term.writeln(`\r\n${l}`));
+            allLines.slice(-lines).forEach(l => term.writeln(l));
         } catch (e) {
             printError(`tail: cannot open '${file}': No such file or directory`);
         }
@@ -1860,6 +2155,7 @@ function cmdEnv() {
     for (const [key, value] of Object.entries(envVars)) {
         printNormal(`${key}=${value}`);
     }
+    printHint('Environment variables configure your shell session. Use "export KEY=VALUE" to set one.');
 }
 
 function cmdExport(args, fullCmd) {
@@ -1876,6 +2172,131 @@ function cmdExport(args, fullCmd) {
     const key = exportContent.substring(0, eqIndex).trim();
     let value = exportContent.substring(eqIndex + 1).trim().replace(/^["']|["']$/g, '');
     envVars[key] = value;
+    printHint(`Environment variable ${key} set. Use "env" or "echo $${key}" to verify.`);
+}
+
+function cmdWhich(args) {
+    if (args.length === 0) {
+        printError('which: missing argument');
+        return;
+    }
+    const available = ['ls', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'uniq', 'git', 'vi', 'vim', 'nano'];
+    for (const cmd of args) {
+        if (available.includes(cmd)) {
+            printNormal(`/usr/bin/${cmd}`);
+        } else {
+            printError(`which: no ${cmd} in (${envVars.PATH})`);
+        }
+    }
+    printHint('"which" locates the executable file for a command in your PATH.');
+}
+
+function cmdType(args) {
+    if (args.length === 0) {
+        printError('-bash: type: missing argument');
+        return;
+    }
+    const builtins = ['cd', 'pwd', 'echo', 'export', 'history', 'alias', 'type', 'source'];
+    const available = ['ls', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'uniq', 'git', 'vi', 'vim', 'nano'];
+    for (const cmd of args) {
+        if (builtins.includes(cmd)) {
+            printNormal(`${cmd} is a shell builtin`);
+        } else if (available.includes(cmd)) {
+            printNormal(`${cmd} is /usr/bin/${cmd}`);
+        } else {
+            printError(`-bash: type: ${cmd}: not found`);
+        }
+    }
+    printHint('"type" shows how a command name would be interpreted (builtin, alias, or external).');
+}
+
+function cmdHints(args) {
+    if (args[0] === 'off') {
+        hintsEnabled = false;
+        printNormal('Educational hints disabled. Use "hints on" to re-enable.');
+    } else if (args[0] === 'on') {
+        hintsEnabled = true;
+        printNormal('Educational hints enabled.');
+    } else {
+        hintsEnabled = !hintsEnabled;
+        printNormal(`Educational hints ${hintsEnabled ? 'enabled' : 'disabled'}.`);
+    }
+}
+
+async function cmdSort(args) {
+    const reverse = args.includes('-r');
+    const numeric = args.includes('-n');
+    const unique = args.includes('-u');
+    const fileArgs = args.filter(a => !a.startsWith('-'));
+
+    let content = '';
+    if (fileArgs.length === 0) {
+        printError('sort: missing file operand');
+        printHint('Usage: sort [options] <file>  Options: -r (reverse), -n (numeric), -u (unique)');
+        return;
+    }
+    for (const file of fileArgs) {
+        try {
+            content += await pfs.readFile(resolvePath(file), 'utf8');
+        } catch (e) {
+            printError(`sort: ${file}: No such file or directory`);
+            return;
+        }
+    }
+    let lines = content.split('\n');
+    lines.sort((a, b) => {
+        if (numeric) return parseFloat(a) - parseFloat(b);
+        return a.localeCompare(b);
+    });
+    if (reverse) lines.reverse();
+    if (unique) lines = lines.filter((l, i) => i === 0 || l !== lines[i - 1]);
+    lines.forEach(l => term.writeln(l));
+    printHint('"sort" orders lines alphabetically. Use -n for numeric, -r for reverse, -u to remove duplicates.');
+}
+
+async function cmdUniq(args) {
+    const countFlag = args.includes('-c');
+    const dupsOnly = args.includes('-d');
+    const fileArgs = args.filter(a => !a.startsWith('-'));
+
+    let content = '';
+    if (fileArgs.length === 0) {
+        printError('uniq: missing file operand');
+        printHint('Usage: uniq [options] <file>  Options: -c (count), -d (only duplicates)');
+        return;
+    }
+    for (const file of fileArgs) {
+        try {
+            content += await pfs.readFile(resolvePath(file), 'utf8');
+        } catch (e) {
+            printError(`uniq: ${file}: No such file or directory`);
+            return;
+        }
+    }
+    const lines = content.split('\n');
+    const result = [];
+    let prevLine = null;
+    let count = 0;
+    for (const line of lines) {
+        if (line === prevLine) {
+            count++;
+        } else {
+            if (prevLine !== null) {
+                if (!dupsOnly || count > 1) {
+                    result.push(countFlag ? `${String(count).padStart(7)} ${prevLine}` : prevLine);
+                }
+            }
+            prevLine = line;
+            count = 1;
+        }
+    }
+    if (prevLine !== null) {
+        if (!dupsOnly || count > 1) {
+            result.push(countFlag ? `${String(count).padStart(7)} ${prevLine}` : prevLine);
+        }
+    }
+    result.forEach(l => term.writeln(l));
+    printHint('"uniq" filters out adjacent duplicate lines. Sort first for full dedup: sort file | uniq');
 }
 
 async function cmdEdit(args) {
@@ -2197,8 +2618,7 @@ async function gitAdd(args) {
                     await git.remove({ fs, dir, filepath });
                 }
             }
-            printNormal('All changes added to staging area');
-            printHint('Now use "git commit -m <message>" to save these changes');
+            printHint('All files staged. Use "git commit -m <message>" to save changes.');
         } else {
             for (const file of args) {
                 // Resolve the filepath relative to repo root
@@ -2222,9 +2642,8 @@ async function gitAdd(args) {
                         // File doesn't exist on disk - remove from index
                         await git.remove({ fs, dir, filepath: relPath });
                     }
-                    printNormal(`Added ${file} to staging area`);
                 } catch (error) {
-                    printError(`git add: '${file}': ${error.message}`);
+                    printError(`fatal: pathspec '${file}' did not match any files`);
                 }
             }
             printHint('Use "git status" to see what\'s staged, then "git commit -m <message>" to commit');
@@ -2247,9 +2666,9 @@ async function gitCommit(args) {
         // Handle -am "message" shorthand
         const amIndex = args.indexOf('-am');
         if (mIndex !== -1 && args.length > mIndex + 1) {
-            message = args.slice(mIndex + 1).join(' ').replace(/^["']|["']$/g, '');
+            message = args[mIndex + 1];
         } else if (amIndex !== -1 && args.length > amIndex + 1) {
-            message = args.slice(amIndex + 1).join(' ').replace(/^["']|["']$/g, '');
+            message = args[amIndex + 1];
         }
 
         // Auto-stage tracked modified files
@@ -2822,9 +3241,7 @@ async function gitLog(args) {
                     term.writeln(`${color}|\\${reset}  Merge: ${parents.map(p => p.substring(0, 7)).join(' ')}`);
                     term.writeln(`${color}|${reset} ${secondColor}|${reset} Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
 
-                    // Format date properly
-                    const date = new Date(commit.commit.author.timestamp * 1000);
-                    const dateStr = date.toString();
+                    const dateStr = formatGitDate(commit.commit.author.timestamp);
                     term.writeln(`${color}|${reset} ${secondColor}|${reset} Date:   ${dateStr}`);
                     term.writeln(`${color}|${reset} ${secondColor}|${reset}`);
 
@@ -2856,9 +3273,7 @@ async function gitLog(args) {
                         term.writeln(`${color}|${reset} ${commitSymbolColor}*${reset} \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
                         term.writeln(`${color}|/${reset}  Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
 
-                        // Format date properly
-                        const date = new Date(commit.commit.author.timestamp * 1000);
-                        const dateStr = date.toString();
+                        const dateStr = formatGitDate(commit.commit.author.timestamp);
 
                         // After |/ we continue with red line if there's more commits
                         if (hasNextCommit) {
@@ -2891,9 +3306,7 @@ async function gitLog(args) {
                         term.writeln(`${graphPrefix}   \x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
                         term.writeln(`${linePrefix}   Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
 
-                        // Format date properly
-                        const date = new Date(commit.commit.author.timestamp * 1000);
-                        const dateStr = date.toString();
+                        const dateStr = formatGitDate(commit.commit.author.timestamp);
                         term.writeln(`${linePrefix}   Date:   ${dateStr}`);
                         term.writeln(`${linePrefix}`);
 
@@ -2941,9 +3354,7 @@ async function gitLog(args) {
                 term.writeln(`\x1b[33mcommit ${commit.oid}\x1b[0m${decoration}`);
                 term.writeln(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
 
-                // Format date properly
-                const date = new Date(commit.commit.author.timestamp * 1000);
-                const dateStr = date.toString();
+                const dateStr = formatGitDate(commit.commit.author.timestamp);
                 term.writeln(`Date:   ${dateStr}`);
                 term.writeln(``);
 
@@ -2995,7 +3406,8 @@ async function gitBranch(args) {
             } catch (e) {
                 if (forceDelete) {
                     try {
-                        await git.deleteBranch({ fs, dir, ref: branchName });
+                        await pfs.unlink(`${dir}/.git/refs/heads/${branchName}`);
+                        printNormal(`Deleted branch ${branchName} (force deleted).`);
                     } catch (e2) {
                         printError(`error: branch '${branchName}' not found.`);
                     }
@@ -3796,6 +4208,20 @@ async function gitReset(args) {
 
         const ref = filteredArgs[0];
 
+        // Handle "git reset HEAD <file>" - unstage specific files
+        if (ref === 'HEAD' && filteredArgs.length > 1) {
+            for (let i = 1; i < filteredArgs.length; i++) {
+                try {
+                    await git.resetIndex({ fs, dir, filepath: filteredArgs[i] });
+                    printNormal(`Unstaged changes for ${filteredArgs[i]}`);
+                } catch (e) {
+                    printError(`error: pathspec '${filteredArgs[i]}' did not match any file(s) known to git`);
+                }
+            }
+            printHint('Files have been unstaged. Use "git status" to see the current state.');
+            return;
+        }
+
         // Check if ref looks like HEAD~n or a commit hash
         const headMatch = ref.match(/^HEAD~(\d+)$/);
         const isCommitRef = headMatch || /^[0-9a-f]{7,40}$/i.test(ref) || ref === 'HEAD';
@@ -4591,7 +5017,7 @@ async function gitShow(args) {
         // Print commit header
         printNormal(`\x1b[33mcommit ${oid}\x1b[0m`);
         printNormal(`Author: ${commit.commit.author.name} <${commit.commit.author.email}>`);
-        printNormal(`Date:   ${new Date(commit.commit.author.timestamp * 1000).toString()}`);
+        printNormal(`Date:   ${formatGitDate(commit.commit.author.timestamp)}`);
         printNormal('');
 
         // Print message with proper indentation
@@ -4605,23 +5031,8 @@ async function gitShow(args) {
         if (parentOid) {
             try {
                 const parentCommit = await git.readCommit({ fs, dir, oid: parentOid });
-                const parentTree = await git.readTree({ fs, dir, oid: parentCommit.commit.tree });
-                const currentTree = await git.readTree({ fs, dir, oid: commit.commit.tree });
-
-                // Build maps for comparison
-                const parentFiles = {};
-                const currentFiles = {};
-
-                for (const entry of parentTree.tree) {
-                    if (entry.type === 'blob') {
-                        parentFiles[entry.path] = entry.oid;
-                    }
-                }
-                for (const entry of currentTree.tree) {
-                    if (entry.type === 'blob') {
-                        currentFiles[entry.path] = entry.oid;
-                    }
-                }
+                const parentFiles = await flattenTree(dir, parentCommit.commit.tree);
+                const currentFiles = await flattenTree(dir, commit.commit.tree);
 
                 // Find changed files
                 const allFiles = new Set([...Object.keys(parentFiles), ...Object.keys(currentFiles)]);
@@ -4676,27 +5087,12 @@ async function gitShow(args) {
                                     });
                                 } catch (e) { }
                             } else {
-                                printNormal(`--- a/${change.file}`);
-                                printNormal(`+++ b/${change.file}`);
                                 try {
                                     const { blob: oldBlob } = await git.readBlob({ fs, dir, oid: parentFiles[change.file] });
                                     const { blob: newBlob } = await git.readBlob({ fs, dir, oid: currentFiles[change.file] });
-                                    const oldContent = new TextDecoder().decode(oldBlob).split('\n');
-                                    const newContent = new TextDecoder().decode(newBlob).split('\n');
-
-                                    // Simple diff display
-                                    const maxLines = Math.max(oldContent.length, newContent.length);
-                                    for (let i = 0; i < Math.min(maxLines, 20); i++) {
-                                        const oldLine = oldContent[i] || '';
-                                        const newLine = newContent[i] || '';
-                                        if (oldLine !== newLine) {
-                                            if (oldLine) term.writeln(`\x1b[31m-${oldLine}\x1b[0m`);
-                                            if (newLine) term.writeln(`\x1b[32m+${newLine}\x1b[0m`);
-                                        }
-                                    }
-                                    if (maxLines > 20) {
-                                        printNormal(`... (${maxLines - 20} more lines)`);
-                                    }
+                                    const oldContent = new TextDecoder().decode(oldBlob);
+                                    const newContent = new TextDecoder().decode(newBlob);
+                                    await printColorizedDiff(oldContent, newContent, change.file);
                                 } catch (e) { }
                             }
                             printNormal('');
@@ -5027,13 +5423,32 @@ async function gitConfig(args) {
 
     if (args[0] === '--list' || args[0] === '-l') {
         try {
+            const configPath = `${dir}/.git/config`;
+            const configContent = await pfs.readFile(configPath, 'utf8');
+            const lines = configContent.split('\n');
+            let section = '';
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('[')) {
+                    const match = trimmed.match(/^\[(\w+)(?:\s+"([^"]+)")?\]/);
+                    if (match) {
+                        section = match[2] ? `${match[1]}.${match[2]}` : match[1];
+                    }
+                } else if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+                    const eqIdx = trimmed.indexOf('=');
+                    const key = trimmed.substring(0, eqIdx).trim();
+                    const val = trimmed.substring(eqIdx + 1).trim();
+                    printNormal(`${section}.${key}=${val}`);
+                }
+            }
+            printHint('Use "git config <key> <value>" to change a setting.');
+        } catch (error) {
+            // Fallback to reading individual values
             const userName = await git.getConfig({ fs, dir, path: 'user.name' }) || 'Student';
             const userEmail = await git.getConfig({ fs, dir, path: 'user.email' }) || 'student@example.com';
             printNormal(`user.name=${userName}`);
             printNormal(`user.email=${userEmail}`);
             printHint('These settings identify you in commits');
-        } catch (error) {
-            printError(`Error: ${error.message}`);
         }
         return;
     }
@@ -5877,11 +6292,20 @@ async function updateFileTree() {
                 // Echo the cd command to terminal
                 term.write(`cd ${dirpath.replace('/home/student', '~')}`);
 
+                previousDir = currentDir;
                 currentDir = dirpath;
                 await updateFileTree();
                 showPrompt();
             });
         });
+
+        // Update cached branch name for prompt
+        try {
+            const gitDir = await git.findRoot({ fs, filepath: currentDir });
+            promptBranch = await git.currentBranch({ fs, dir: gitDir }) || '';
+        } catch (e) {
+            promptBranch = '';
+        }
     } catch (error) {
         treeContainer.innerHTML = `<div style="color: #f44;">Error loading file tree</div>`;
     }
@@ -6081,7 +6505,7 @@ async function handleTabCompletion() {
 
     // Command completion (if it's the first word)
     if (parts.length === 1) {
-        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'clear', 'reset', 'history', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'whoami', 'hostname', 'date', 'env', 'printenv', 'export', 'vi', 'vim', 'nano', 'edit', 'git'];
+        const commands = ['help', 'ls', 'll', 'cd', 'pwd', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'clear', 'reset', 'history', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'uniq', 'whoami', 'hostname', 'date', 'env', 'printenv', 'export', 'vi', 'vim', 'nano', 'edit', 'git', 'which', 'type', 'hints', 'true', 'false', 'man', 'sudo'];
         const matches = commands.filter(cmd => cmd.startsWith(lastPart));
 
         if (matches.length === 1) {
@@ -6110,7 +6534,7 @@ async function handleTabCompletion() {
 
     // Git subcommand completion
     if (parts.length === 2 && parts[0] === 'git') {
-        const gitCommands = ['init', 'status', 'add', 'commit', 'log', 'branch', 'checkout', 'diff', 'reset', 'rm', 'mv', 'merge', 'tag', 'show', 'fetch', 'stash', 'config', 'clone', 'push', 'pull', 'remote', 'rebase', 'cherry-pick', 'revert', 'reflog', 'blame'];
+        const gitCommands = ['init', 'status', 'add', 'commit', 'log', 'branch', 'checkout', 'switch', 'restore', 'diff', 'reset', 'rm', 'mv', 'merge', 'tag', 'show', 'fetch', 'stash', 'config', 'clone', 'push', 'pull', 'remote', 'rebase', 'cherry-pick', 'revert', 'reflog', 'blame', 'clean'];
         const matches = gitCommands.filter(cmd => cmd.startsWith(lastPart));
 
         if (matches.length === 1) {
