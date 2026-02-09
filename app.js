@@ -136,6 +136,194 @@ const MAX_UNDO_HISTORY = 50;
 // Quoted insert mode (Ctrl+V)
 let quotedInsertMode = false;
 
+// Real-time command preview hint dictionary
+const COMMAND_HINTS = {
+    ls:       { desc: 'Lists files and directories. Use -a for hidden files, -l for details.', syntax: 'ls [options] [path]' },
+    ll:       { desc: 'Lists all files in long format (alias for ls -la).', syntax: 'll' },
+    cd:       { desc: 'Changes directory. Use ".." for parent, "~" for home, "-" for previous.', syntax: 'cd <directory>' },
+    pwd:      { desc: 'Prints the full path of the current working directory.', syntax: 'pwd' },
+    cat:      { desc: 'Displays file contents. Concatenates multiple files together.', syntax: 'cat <file> [file2...]' },
+    mkdir:    { desc: 'Creates a new directory. Use -p to create parent dirs automatically.', syntax: 'mkdir [-p] <directory>' },
+    touch:    { desc: 'Creates an empty file, or updates the timestamp of an existing file.', syntax: 'touch <file> [file2...]' },
+    rm:       { desc: 'Removes files. Use -r for directories, -f to force. Deletion is permanent!', syntax: 'rm [-rf] <file>' },
+    cp:       { desc: 'Copies files or directories. Use -r for directories.', syntax: 'cp [-r] <source> <dest>' },
+    mv:       { desc: 'Moves or renames files and directories.', syntax: 'mv <source> <dest>' },
+    echo:     { desc: 'Prints text to the terminal. Use > to write to a file, >> to append.', syntax: 'echo <text>' },
+    grep:     { desc: 'Searches for a pattern in files. -i case-insensitive, -r recursive.', syntax: 'grep [options] <pattern> <file>' },
+    head:     { desc: 'Shows the first N lines of a file (default 10).', syntax: 'head [-n N] <file>' },
+    tail:     { desc: 'Shows the last N lines of a file (default 10).', syntax: 'tail [-n N] <file>' },
+    wc:       { desc: 'Counts lines, words, and bytes in a file.', syntax: 'wc [-lwc] <file>' },
+    find:     { desc: 'Searches for files by name or pattern in a directory tree.', syntax: 'find [dir] -name <pattern>' },
+    diff:     { desc: 'Compares two files line by line and shows differences.', syntax: 'diff <file1> <file2>' },
+    sort:     { desc: 'Sorts lines alphabetically. Use -n for numeric, -r for reverse.', syntax: 'sort [-rnu] <file>' },
+    uniq:     { desc: 'Filters adjacent duplicate lines. Tip: sort the file first.', syntax: 'uniq [-cd] <file>' },
+    clear:    { desc: 'Clears the terminal screen. Command history is preserved.', syntax: 'clear' },
+    reset:    { desc: 'Resets the entire filesystem to its initial state. All changes lost!', syntax: 'reset' },
+    history:  { desc: 'Shows command history. Use !n to re-run command #n.', syntax: 'history' },
+    help:     { desc: 'Shows all available commands with descriptions.', syntax: 'help' },
+    whoami:   { desc: 'Prints the current username.', syntax: 'whoami' },
+    hostname: { desc: 'Prints the system hostname.', syntax: 'hostname' },
+    date:     { desc: 'Prints the current date and time.', syntax: 'date' },
+    env:      { desc: 'Prints all environment variables.', syntax: 'env' },
+    printenv: { desc: 'Prints all environment variables.', syntax: 'printenv' },
+    export:   { desc: 'Sets an environment variable for the current session.', syntax: 'export KEY=VALUE' },
+    which:    { desc: 'Shows where a command executable is located.', syntax: 'which <command>' },
+    type:     { desc: 'Shows whether a command is a builtin, alias, or external.', syntax: 'type <command>' },
+    hints:    { desc: 'Toggles educational hints on or off.', syntax: 'hints [on|off]' },
+    vi:       { desc: 'Opens a file in the editor. Ctrl+S save, Ctrl+X close.', syntax: 'vi <file>' },
+    vim:      { desc: 'Opens a file in the editor. Ctrl+S save, Ctrl+X close.', syntax: 'vim <file>' },
+    nano:     { desc: 'Opens a file in the editor. Ctrl+S save, Ctrl+X close.', syntax: 'nano <file>' },
+    edit:     { desc: 'Opens a file in the editor. Ctrl+S save, Ctrl+X close.', syntax: 'edit <file>' },
+    debug:    { desc: 'Shows debug info: current directory, git state, file system.', syntax: 'debug' },
+    git: {
+        desc: 'Git version control. Type "git <command>" for specific operations.',
+        syntax: 'git <command> [options]',
+        sub: {
+            init:          { desc: 'Creates a new Git repository in the current directory (.git folder).', syntax: 'git init' },
+            status:        { desc: 'Shows staged, modified, and untracked files. Run this often!', syntax: 'git status' },
+            add:           { desc: 'Stages changes for the next commit. Files must be staged before committing.', syntax: 'git add <file>',
+                             flags: { '.': 'Stage ALL changes in current directory', '-A': 'Stage all changes in entire repo' } },
+            commit:        { desc: 'Records staged changes as a new snapshot in history.', syntax: 'git commit -m "<message>"',
+                             flags: { '-m': 'Provide commit message inline', '--amend': 'Modify the most recent commit', '-a': 'Auto-stage tracked modified files' } },
+            log:           { desc: 'Shows the commit history with hash, author, date, and message.', syntax: 'git log [options]',
+                             flags: { '--oneline': 'Compact one-line format', '--graph': 'Show branch graph', '--all': 'Show all branches', '-n': 'Limit to N commits' } },
+            diff:          { desc: 'Shows line-by-line changes between working directory and last commit.', syntax: 'git diff [file]',
+                             flags: { '--staged': 'Compare staging area vs last commit', '--stat': 'Summary of changes' } },
+            branch:        { desc: 'Lists, creates, or deletes branches for independent work.', syntax: 'git branch [name]',
+                             flags: { '-d': 'Delete a merged branch', '-D': 'Force delete', '-m': 'Rename current branch', '-a': 'Show all branches' } },
+            checkout:      { desc: 'Switches branches or restores files.', syntax: 'git checkout <branch|file>',
+                             flags: { '-b': 'Create and switch to new branch', '--': 'Discard changes to a file' } },
+            switch:        { desc: 'Switches branches (modern, clearer than checkout).', syntax: 'git switch <branch>',
+                             flags: { '-c': 'Create and switch to a new branch' } },
+            restore:       { desc: 'Discards changes or unstages files (modern replacement for checkout --).', syntax: 'git restore <file>',
+                             flags: { '--staged': 'Unstage a file (keep working tree changes)' } },
+            merge:         { desc: 'Combines another branch into the current branch.', syntax: 'git merge <branch>',
+                             flags: { '--abort': 'Abort an in-progress merge' } },
+            rebase:        { desc: 'Replays commits on top of another branch for linear history.', syntax: 'git rebase <branch>',
+                             flags: { '--abort': 'Abort the rebase', '--continue': 'Continue after resolving conflicts' } },
+            reset:         { desc: 'Moves HEAD to a different commit. Can unstage or undo commits.', syntax: 'git reset [mode] [commit]',
+                             flags: { '--soft': 'Keep changes staged', '--mixed': 'Unstage changes (default)', '--hard': 'Discard ALL changes (dangerous!)' } },
+            stash:         { desc: 'Temporarily saves uncommitted changes to switch branches cleanly.', syntax: 'git stash [push|pop|list|drop]' },
+            tag:           { desc: 'Creates a named reference to a commit (e.g. for releases).', syntax: 'git tag [name]',
+                             flags: { '-d': 'Delete a tag', '-a': 'Create annotated tag' } },
+            remote:        { desc: 'Manages connections to remote repositories (like GitHub).', syntax: 'git remote [add|remove]' },
+            clone:         { desc: 'Downloads a remote repository with all its history.', syntax: 'git clone <url> [dir]' },
+            fetch:         { desc: 'Downloads new commits from remote, but does NOT merge them.', syntax: 'git fetch [remote]' },
+            push:          { desc: 'Uploads local commits to a remote repository.', syntax: 'git push [remote] [branch]' },
+            pull:          { desc: 'Fetches AND merges remote changes. Equivalent to fetch + merge.', syntax: 'git pull [remote] [branch]' },
+            show:          { desc: 'Shows detailed info about a commit, including the diff.', syntax: 'git show [commit]' },
+            rm:            { desc: 'Removes a file from working directory and staging area.', syntax: 'git rm <file>',
+                             flags: { '--cached': 'Remove from staging only, keep file', '-r': 'Remove directories recursively' } },
+            mv:            { desc: 'Moves/renames a file and stages the change automatically.', syntax: 'git mv <source> <dest>' },
+            config:        { desc: 'Gets or sets Git config values (name, email, etc).', syntax: 'git config <key> [value]' },
+            'cherry-pick': { desc: 'Applies a specific commit from another branch onto current branch.', syntax: 'git cherry-pick <hash>' },
+            revert:        { desc: 'Creates a NEW commit that undoes a previous commit (safe for shared history).', syntax: 'git revert <commit>' },
+            reflog:        { desc: 'Shows where HEAD has pointed. Lifesaver for recovering "lost" commits!', syntax: 'git reflog' },
+            blame:         { desc: 'Shows who last modified each line of a file, and when.', syntax: 'git blame <file>' },
+            clean:         { desc: 'Removes untracked files from the working directory.', syntax: 'git clean [-n|-f] [-d]',
+                             flags: { '-n': 'Dry run (preview)', '-f': 'Force deletion', '-d': 'Include directories' } },
+            shortlog:      { desc: 'Summarizes commit history grouped by author.', syntax: 'git shortlog [-s] [-n]' },
+        }
+    }
+};
+
+// Command preview panel state
+let previewEl = null;
+let previewTextEl = null;
+let previewDebounceTimer = null;
+const PREVIEW_DEBOUNCE_MS = 100;
+
+function initPreviewPanel() {
+    previewEl = document.getElementById('commandPreview');
+}
+
+function getCommandPreview(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+
+    // For piped/chained commands, show hint for the first command
+    const parts = trimmed.split(/\s+/);
+    const cmd = parts[0];
+
+    const entry = COMMAND_HINTS[cmd];
+    if (!entry) return null;
+
+    // Git with subcommands
+    if (cmd === 'git' && entry.sub) {
+        if (parts.length < 2 || parts[1] === '') {
+            return `<span class="preview-cmd">git</span> <span class="preview-syntax">&lt;command&gt;</span> <span class="preview-desc">\u2014 ${entry.desc}</span>`;
+        }
+
+        const subcmd = parts[1];
+
+        // Partial subcommand match (user still typing)
+        if (parts.length === 2 && !entry.sub[subcmd]) {
+            const matches = Object.keys(entry.sub).filter(s => s.startsWith(subcmd));
+            if (matches.length === 1) {
+                const match = entry.sub[matches[0]];
+                return `<span class="preview-cmd">git ${matches[0]}</span> <span class="preview-desc">\u2014 ${match.desc}</span>`;
+            } else if (matches.length > 1 && matches.length <= 8) {
+                return `<span class="preview-desc">Did you mean: </span><span class="preview-cmd">${matches.join(', ')}</span>`;
+            }
+            return null;
+        }
+
+        const subEntry = entry.sub[subcmd];
+        if (!subEntry) return null;
+
+        // Check for flag-specific hints
+        if (subEntry.flags) {
+            const typedFlags = parts.slice(2).filter(p => p.startsWith('-'));
+            if (typedFlags.length > 0) {
+                const lastFlag = typedFlags[typedFlags.length - 1];
+                if (subEntry.flags[lastFlag]) {
+                    return `<span class="preview-cmd">git ${subcmd} ${lastFlag}</span> <span class="preview-desc">\u2014 ${subEntry.flags[lastFlag]}</span>`;
+                }
+            }
+            // Check for non-flag args like "." in "git add ."
+            const nonFlagArgs = parts.slice(2).filter(p => !p.startsWith('-'));
+            if (nonFlagArgs.length > 0) {
+                const lastArg = nonFlagArgs[nonFlagArgs.length - 1];
+                if (subEntry.flags[lastArg]) {
+                    return `<span class="preview-cmd">git ${subcmd} ${lastArg}</span> <span class="preview-desc">\u2014 ${subEntry.flags[lastArg]}</span>`;
+                }
+            }
+        }
+
+        return `<span class="preview-cmd">git ${subcmd}</span> <span class="preview-syntax">${escapeHtml(subEntry.syntax.replace('git ' + subcmd, '').trim())}</span> <span class="preview-desc">\u2014 ${subEntry.desc}</span>`;
+    }
+
+    // Non-git commands
+    return `<span class="preview-cmd">${cmd}</span> <span class="preview-syntax">${escapeHtml(entry.syntax.replace(cmd, '').trim())}</span> <span class="preview-desc">\u2014 ${entry.desc}</span>`;
+}
+
+function showPreview(htmlContent) {
+    if (!previewEl) return;
+    previewEl.innerHTML = htmlContent;
+    previewEl.classList.remove('hidden');
+}
+
+function hidePreview() {
+    if (!previewEl) return;
+    previewEl.classList.add('hidden');
+}
+
+function updatePreview() {
+    if (!hintsEnabled) { hidePreview(); return; }
+    if (reverseSearchMode || forwardSearchMode || isCommitMessageMode) { hidePreview(); return; }
+
+    const editorContainer = document.getElementById('editorContainer');
+    if (editorContainer && !editorContainer.classList.contains('hidden')) { hidePreview(); return; }
+
+    const hint = getCommandPreview(currentLine);
+    if (hint) { showPreview(hint); } else { hidePreview(); }
+}
+
+function schedulePreviewUpdate() {
+    if (previewDebounceTimer) clearTimeout(previewDebounceTimer);
+    previewDebounceTimer = setTimeout(updatePreview, PREVIEW_DEBOUNCE_MS);
+}
+
 // Shell-like tokenizer: handles "double quotes", 'single quotes', backslash escaping
 function tokenize(input) {
     const tokens = [];
@@ -362,6 +550,9 @@ async function init() {
 
         // Show prompt
         showPrompt();
+
+        // Initialize command preview panel
+        initPreviewPanel();
 
         // Update file tree
         await updateFileTree();
@@ -912,6 +1103,7 @@ function removeShellComments(cmd) {
 
 // Command processor
 async function processCommand(cmd) {
+    hidePreview();
     let trimmedCmd = removeShellComments(cmd).trim();
     if (!trimmedCmd) {
         showPrompt();
@@ -2221,6 +2413,7 @@ function cmdHints(args) {
         hintsEnabled = !hintsEnabled;
         printNormal(`Educational hints ${hintsEnabled ? 'enabled' : 'disabled'}.`);
     }
+    hidePreview();
 }
 
 async function cmdSort(args) {
@@ -6643,6 +6836,7 @@ async function handleTabCompletion() {
 
 // Reverse search functions
 function startReverseSearch() {
+    hidePreview();
     if (commandHistory.length === 0) {
         // No history available
         term.write('\r\x1b[K');
@@ -6758,6 +6952,7 @@ function redrawLine() {
     if (moveBack > 0) {
         term.write('\x1b[' + moveBack + 'D');
     }
+    schedulePreviewUpdate();
 }
 
 // Kill ring helpers
@@ -6795,6 +6990,7 @@ function restoreUndoState() {
 
 // Forward search functions
 function startForwardSearch() {
+    hidePreview();
     if (commandHistory.length === 0) {
         term.write('\r\x1b[K');
         term.write('\x1b[31m(no history available)\x1b[0m');
@@ -7196,6 +7392,7 @@ async function handleTermInput(data) {
 
     // Ctrl+C - Cancel current line (when not in reverse search mode)
     if (code === 3) {
+        hidePreview();
         term.write('^C\r\n');
         currentLine = '';
         cursorPos = 0;
@@ -7297,6 +7494,7 @@ async function handleTermInput(data) {
 
     // Ctrl+J - Same as Enter (line feed)
     if (code === 10) {
+        hidePreview();
         term.write('\r\n');
         await processCommand(currentLine);
         currentLine = '';
@@ -7313,6 +7511,7 @@ async function handleTermInput(data) {
 
     // Handle special keys
     if (code === 13) { // Enter
+        hidePreview();
         term.write('\r\n');
         await processCommand(currentLine);
         currentLine = '';
@@ -7330,6 +7529,7 @@ async function handleTermInput(data) {
             if (moveBack > 0) {
                 term.write('\x1b[' + moveBack + 'D');
             }
+            schedulePreviewUpdate();
         }
     } else if (code === 27) { // Escape sequences (arrow keys, special keys)
         // Up arrow
@@ -7484,6 +7684,7 @@ async function handleTermInput(data) {
         if (moveBack > 0) {
             term.write('\x1b[' + moveBack + 'D');
         }
+        schedulePreviewUpdate();
     }
 }
 
