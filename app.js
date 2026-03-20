@@ -37,9 +37,10 @@ window.addEventListener('resize', () => {
 // Constants
 const CORS_PROXIES = [
     // 'https://<your-subdomain>.workers.dev/', // TODO: Uncomment and add your worker URL here
-    'https://isomorphic-git-cors-proxy.mamrehn.workers.dev/',
+    'https://isomorphic-git-cors-proxy.mamrehn.workers.dev',
     'https://cors.isomorphic-git.org',
-    'https://corsproxy.io/?url=',
+    // Note: corsproxy.io/?url= is incompatible with isomorphic-git's corsProxy option
+    // (the library constructs corsProxy + '/' + url, creating ?url=/https://... which breaks)
 ];
 let GIT_PROXY = CORS_PROXIES[0];
 const DEFAULT_REPO_URL = 'https://github.com/mamrehn/project1.git';
@@ -52,9 +53,7 @@ async function findWorkingProxy() {
         try {
             // Test with a lightweight request to GitHub's git info/refs
             // increased timeout to 10s for slower connections
-            const testUrl = proxy.includes('?url=')
-                ? `${proxy}https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`
-                : `${proxy}/https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`;
+            const testUrl = `${proxy}/https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`;
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -1127,6 +1126,7 @@ async function processPipedCommands(fullCommand) {
                 let regex;
                 try { regex = new RegExp(pattern, ignoreCase ? 'i' : ''); } catch (e) { regex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
                 const lines = output.split('\n');
+                if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
                 const filtered = lines.filter(line => {
                     // Strip ANSI codes for matching
                     const clean = line.replace(/\x1b\[[0-9;]*m/g, '');
@@ -1141,12 +1141,16 @@ async function processPipedCommands(fullCommand) {
                 let n = 10;
                 if (pipeArgs[0] === '-n' && pipeArgs[1]) n = parseInt(pipeArgs[1], 10);
                 else if (pipeArgs[0]?.startsWith('-')) n = parseInt(pipeArgs[0].slice(1), 10);
-                output = output.split('\n').slice(0, n).join('\n');
+                const headLines = output.split('\n');
+                if (headLines.length > 0 && headLines[headLines.length - 1] === '') headLines.pop();
+                output = headLines.slice(0, n).join('\n');
             } else if (pipeCommand === 'tail') {
                 let n = 10;
                 if (pipeArgs[0] === '-n' && pipeArgs[1]) n = parseInt(pipeArgs[1], 10);
                 else if (pipeArgs[0]?.startsWith('-')) n = parseInt(pipeArgs[0].slice(1), 10);
-                output = output.split('\n').slice(-n).join('\n');
+                const tailLines = output.split('\n');
+                if (tailLines.length > 0 && tailLines[tailLines.length - 1] === '') tailLines.pop();
+                output = tailLines.slice(-n).join('\n');
             } else if (pipeCommand === 'wc') {
                 const showL = pipeArgs.includes('-l') || pipeArgs.length === 0;
                 const showW = pipeArgs.includes('-w') || pipeArgs.length === 0;
@@ -1179,6 +1183,7 @@ async function processPipedCommands(fullCommand) {
             } else if (pipeCommand === 'less' || pipeCommand === 'more') {
                 // Pipe into pager
                 const lines = output.split('\n');
+                if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
                 startPager(lines, 'pipe');
                 return; // pager takes over, don't print output
             } else if (pipeCommand === 'tee') {
@@ -1251,6 +1256,7 @@ async function processPipedCommands(fullCommand) {
                         return indices;
                     }
                     const lines = output.split('\n');
+                    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
                     output = lines.map(line => {
                         if (cutFlags.chars) {
                             const indices = parseCutSpec(cutFlags.chars);
@@ -1268,7 +1274,9 @@ async function processPipedCommands(fullCommand) {
                 if (tacLines.length > 0 && tacLines[tacLines.length - 1] === '') tacLines.pop();
                 output = tacLines.reverse().join('\n');
             } else if (pipeCommand === 'rev') {
-                output = output.split('\n').map(l => [...l].reverse().join('')).join('\n');
+                const revLines = output.split('\n');
+                if (revLines.length > 0 && revLines[revLines.length - 1] === '') revLines.pop();
+                output = revLines.map(l => [...l].reverse().join('')).join('\n');
             } else {
                 printError(`Pipe command not supported: ${pipeCommand}`);
                 return;
@@ -2063,7 +2071,9 @@ async function cmdCat(args) {
                 continue;
             }
             const content = await pfs.readFile(filepath, 'utf8');
-            content.split('\n').forEach(line => {
+            const catLines = content.split('\n');
+            if (catLines.length > 0 && catLines[catLines.length - 1] === '') catLines.pop();
+            catLines.forEach(line => {
                 term.writeln(line);
             });
         } catch (error) {
@@ -2391,6 +2401,7 @@ async function cmdGrep(args) {
         try {
             const content = await pfs.readFile(filepath, 'utf8');
             const lines = content.split('\n');
+            if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
             let matchCount = 0;
             const results = [];
 
@@ -2480,6 +2491,7 @@ async function cmdHead(args) {
             const content = await pfs.readFile(resolvePath(file), 'utf8');
             if (files.length > 1) printNormal(`==> ${file} <==`);
             const allLines = content.split('\n');
+            if (allLines.length > 0 && allLines[allLines.length - 1] === '') allLines.pop();
             allLines.slice(0, lines).forEach(l => term.writeln(l));
         } catch (e) {
             printError(`head: cannot open '${file}': No such file or directory`);
@@ -2510,6 +2522,7 @@ async function cmdTail(args) {
             const content = await pfs.readFile(resolvePath(file), 'utf8');
             if (files.length > 1) printNormal(`==> ${file} <==`);
             const allLines = content.split('\n');
+            if (allLines.length > 0 && allLines[allLines.length - 1] === '') allLines.pop();
             allLines.slice(-lines).forEach(l => term.writeln(l));
         } catch (e) {
             printError(`tail: cannot open '${file}': No such file or directory`);
@@ -5356,77 +5369,105 @@ async function gitClone(args) {
 
     printNormal(`Cloning into '${repoName}'...`);
 
-    try {
-        // Create directory
-        await mkdirp(targetPath);
+    // Build list of proxies to try: current GIT_PROXY first, then others
+    const proxiesToTry = [GIT_PROXY, ...CORS_PROXIES.filter(p => p !== GIT_PROXY)];
+    let lastError = null;
 
-        // Clone the repository (fetch all branches by default)
-        let lastPhase = '';
-        await git.clone({
-            fs,
-            http: httpModule,
-            dir: targetPath,
-            url: url,
-            corsProxy: GIT_PROXY,
-            singleBranch: false, // Fetch all branches
-            depth: 10, // Shallow clone for performance (only last 10 commits)
-            onProgress: (event) => {
-                if (event.phase === 'Receiving objects' || event.phase === 'Resolving deltas') {
-                    const percent = event.total ? Math.round((event.loaded / event.total) * 100) : '?';
-                    // Only show every 25% or when phase changes to reduce output
-                    if (event.phase !== lastPhase || percent === 100 || percent % 25 === 0) {
-                        term.write(`\r${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
-                        if (percent === 100) {
-                            term.write('\r\n');
-                            lastPhase = event.phase;
+    for (const proxy of proxiesToTry) {
+        try {
+            // Create directory (or recreate if retrying)
+            try { await mkdirp(targetPath); } catch (e) { /* exists from retry */ }
+
+            // Clone the repository (fetch all branches by default)
+            let lastPhase = '';
+            await git.clone({
+                fs,
+                http: httpModule,
+                dir: targetPath,
+                url: url,
+                corsProxy: proxy,
+                singleBranch: false, // Fetch all branches
+                depth: 10, // Shallow clone for performance (only last 10 commits)
+                onProgress: (event) => {
+                    if (event.phase === 'Receiving objects' || event.phase === 'Resolving deltas') {
+                        const percent = event.total ? Math.round((event.loaded / event.total) * 100) : '?';
+                        // Only show every 25% or when phase changes to reduce output
+                        if (event.phase !== lastPhase || percent === 100 || percent % 25 === 0) {
+                            term.write(`\r${event.phase}: ${percent}% (${event.loaded}/${event.total || '?'})`);
+                            if (percent === 100) {
+                                term.write('\r\n');
+                                lastPhase = event.phase;
+                            }
                         }
                     }
+                },
+                onMessage: (message) => {
+                    term.write(`\rremote: ${message}\r\n`);
+                },
+                onAuth: () => {
+                    // For public repos, no auth needed
+                    return { username: '', password: '' };
                 }
-            },
-            onMessage: (message) => {
-                term.write(`\rremote: ${message}\r\n`);
-            },
-            onAuth: () => {
-                // For public repos, no auth needed
-                return { username: '', password: '' };
+            });
+
+            // Clone succeeded — update GIT_PROXY if we used a different one
+            if (proxy !== GIT_PROXY) {
+                GIT_PROXY = proxy;
+                console.log(`Switched CORS proxy to: ${proxy}`);
             }
-        });
 
-        // Configure git user in the cloned repo
-        await git.setConfig({ fs, dir: targetPath, path: 'user.name', value: DEFAULT_USER.name });
-        await git.setConfig({ fs, dir: targetPath, path: 'user.email', value: DEFAULT_USER.email });
+            // Configure git user in the cloned repo
+            await git.setConfig({ fs, dir: targetPath, path: 'user.name', value: DEFAULT_USER.name });
+            await git.setConfig({ fs, dir: targetPath, path: 'user.email', value: DEFAULT_USER.email });
 
-        printNormal(`\x1b[32m✓ Successfully cloned repository!\x1b[0m`);
-        term.writeln(''); // Blank line before hints
-        printHint(`cd ${repoName} && git log --graph --oneline to explore the history`);
-        printHint('Large repositories may take some time. Using shallow clone for performance.');
+            printNormal(`\x1b[32m✓ Successfully cloned repository!\x1b[0m`);
+            term.writeln(''); // Blank line before hints
+            printHint(`cd ${repoName} && git log --graph --oneline to explore the history`);
+            printHint('Large repositories may take some time. Using shallow clone for performance.');
+            return;
 
-    } catch (error) {
-        printError(`Failed to clone repository: ${error.message}`);
+        } catch (error) {
+            lastError = error;
+            console.warn(`Clone failed with proxy ${proxy}: ${error.message}`);
 
-        // Clean up partial clone
-        try {
-            await removeDirectory(targetPath);
-        } catch (cleanupError) {
-            // Ignore cleanup errors
+            // Clean up partial clone before retrying
+            try {
+                await removeDirectory(targetPath);
+            } catch (cleanupError) {
+                // Ignore cleanup errors
+            }
+
+            // If it's a 404 or auth error, don't retry with another proxy — the issue is the repo
+            if (error.message.includes('404') || error.message.includes('not found') || error.message.includes('401')) {
+                break;
+            }
+
+            // Try next proxy
+            if (proxy !== proxiesToTry[proxiesToTry.length - 1]) {
+                printNormal(`Proxy failed, trying another...`);
+            }
         }
-
-        // Provide helpful error messages
-        if (error.message.includes('404') || error.message.includes('not found')) {
-            printHint('Repository not found. Check the URL and make sure the repository is public.');
-        } else if (error.message.includes('CORS') || error.message.includes('cors')) {
-            printHint('CORS error. The repository might not allow cross-origin requests.');
-        } else if (error.message.includes('rate limit')) {
-            printHint('GitHub rate limit exceeded. Try again later.');
-        } else if (error.message.includes('timeout')) {
-            printHint('Request timed out. The repository might be too large or your connection is slow.');
-            printHint('Try a smaller repository or check your internet connection.');
-        } else {
-            printHint('Make sure the repository URL is correct and the repository is public.');
-        }
-
-        console.error('Clone error details:', error);
     }
+
+    // All proxies failed
+    printError(`Failed to clone repository: ${lastError.message}`);
+
+    // Provide helpful error messages
+    if (lastError.message.includes('404') || lastError.message.includes('not found')) {
+        printHint('Repository not found. Check the URL and make sure the repository is public.');
+    } else if (lastError.message.includes('CORS') || lastError.message.includes('cors')) {
+        printHint('CORS error. The repository might not allow cross-origin requests.');
+    } else if (lastError.message.includes('rate limit')) {
+        printHint('GitHub rate limit exceeded. Try again later.');
+    } else if (lastError.message.includes('timeout')) {
+        printHint('Request timed out. The repository might be too large or your connection is slow.');
+        printHint('Try a smaller repository or check your internet connection.');
+    } else {
+        printHint('All CORS proxies failed. Check your internet connection.');
+        printHint('Make sure the repository URL is correct and the repository is public.');
+    }
+
+    console.error('Clone error details:', lastError);
 }
 
 async function gitRm(args) {
@@ -5808,7 +5849,9 @@ async function gitShow(args) {
                                 try {
                                     const { blob } = await git.readBlob({ fs, dir, oid: currentFiles[change.file] });
                                     const content = new TextDecoder().decode(blob);
-                                    content.split('\n').forEach(line => {
+                                    const addLines = content.split('\n');
+                                    if (addLines.length > 0 && addLines[addLines.length - 1] === '') addLines.pop();
+                                    addLines.forEach(line => {
                                         term.writeln(`\x1b[32m+${line}\x1b[0m`);
                                     });
                                 } catch (e) { }
@@ -5818,7 +5861,9 @@ async function gitShow(args) {
                                 try {
                                     const { blob } = await git.readBlob({ fs, dir, oid: parentFiles[change.file] });
                                     const content = new TextDecoder().decode(blob);
-                                    content.split('\n').forEach(line => {
+                                    const delLines = content.split('\n');
+                                    if (delLines.length > 0 && delLines[delLines.length - 1] === '') delLines.pop();
+                                    delLines.forEach(line => {
                                         term.writeln(`\x1b[31m-${line}\x1b[0m`);
                                     });
                                 } catch (e) { }
@@ -7123,7 +7168,9 @@ async function cmdLess(args) {
             return;
         }
         const content = await pfs.readFile(filepath, 'utf8');
-        startPager(content.split('\n'), args[0]);
+        const pagerLines = content.split('\n');
+        if (pagerLines.length > 0 && pagerLines[pagerLines.length - 1] === '') pagerLines.pop();
+        startPager(pagerLines, args[0]);
     } catch (e) {
         printError(`less: ${args[0]}: No such file or directory`);
     }
@@ -7355,6 +7402,7 @@ async function cmdRev(args) {
         try {
             const content = await pfs.readFile(resolvePath(filename), 'utf8');
             const lines = content.split('\n');
+            if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
             lines.forEach(l => term.writeln([...l].reverse().join('')));
         } catch (e) {
             printError(`rev: ${filename}: No such file or directory`);
@@ -7412,6 +7460,7 @@ async function cmdCut(args) {
         try {
             const content = await pfs.readFile(resolvePath(filename), 'utf8');
             const lines = content.split('\n');
+            if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
             for (const line of lines) {
                 if (flags.chars) {
                     const indices = parseSpec(flags.chars);
@@ -7455,7 +7504,9 @@ async function cmdTr(args) {
         try {
             const content = await pfs.readFile(resolvePath(fileArg), 'utf8');
             const result = translateChars(content, set1, set2, deleteMode);
-            result.split('\n').forEach(l => term.writeln(l));
+            const trLines = result.split('\n');
+            if (trLines.length > 0 && trLines[trLines.length - 1] === '') trLines.pop();
+            trLines.forEach(l => term.writeln(l));
         } catch (e) {
             printError(`tr: ${fileArg}: No such file or directory`);
         }
