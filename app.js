@@ -1442,7 +1442,7 @@ async function executeDispatch(trimmedCmd) {
     let args = parts.slice(1);
 
     // Expand globs for file-operating commands
-    const globCommands = ['ls', 'cat', 'rm', 'cp', 'mv', 'head', 'tail', 'wc', 'grep', 'touch', 'git', 'less', 'more', 'stat', 'ln', 'tac', 'rev', 'cut', 'chmod', 'diff', 'sort', 'uniq', 'tree'];
+    const globCommands = ['ls', 'cat', 'rm', 'cp', 'mv', 'head', 'tail', 'wc', 'grep', 'touch', 'git', 'less', 'more', 'stat', 'ln', 'tac', 'rev', 'cut', 'chmod', 'diff', 'sort', 'uniq', 'tree', 'tr'];
     if (globCommands.includes(command)) {
         args = await expandGlobs(args);
     }
@@ -1611,6 +1611,14 @@ async function executeDispatch(trimmedCmd) {
                 break;
             case 'chmod':
                 cmdChmod(args);
+                break;
+            case 'tee':
+                printError('tee: no input (use in a pipe, e.g., echo "text" | tee file.txt)');
+                printHint('tee reads from piped input and writes to both stdout and a file.');
+                break;
+            case 'xargs':
+                printError('xargs: no input (use in a pipe, e.g., find . -name "*.txt" | xargs cat)');
+                printHint('xargs builds and executes commands from piped input.');
                 break;
             default:
                 printError(`${command}: command not found`);
