@@ -329,7 +329,7 @@ function hidePreview() {
 
 function updatePreview() {
     if (!hintsEnabled) { hidePreview(); return; }
-    if (reverseSearchMode || forwardSearchMode || isCommitMessageMode) { hidePreview(); return; }
+    if (reverseSearchMode || forwardSearchMode || isCommitMessageMode || pagerMode) { hidePreview(); return; }
 
     const editorContainer = document.getElementById('editorContainer');
     if (editorContainer && !editorContainer.classList.contains('hidden')) { hidePreview(); return; }
@@ -1202,12 +1202,14 @@ async function processPipedCommands(fullCommand) {
                 // xargs runs a command with piped input as arguments
                 const xargsCmd = pipeArgs[0] || 'echo';
                 const xargsArgs = pipeArgs.slice(1);
-                const inputItems = output.split(/\s+/).filter(Boolean);
-                // Execute the command with input items as extra args
+                // Split on newlines first (preserves items with spaces), then whitespace within lines
+                const inputItems = output.split('\n').flatMap(line => line.trim().split(/\s+/)).filter(Boolean);
+                // Execute the command with input items as extra args, quoting to preserve spaces
                 const fullArgs = [...xargsArgs, ...inputItems];
+                const quotedArgs = fullArgs.map(a => a.includes(' ') ? `"${a.replace(/"/g, '\\"')}"` : a);
                 startCapture();
                 try {
-                    await executeDispatch(`${xargsCmd} ${fullArgs.join(' ')}`);
+                    await executeDispatch(`${xargsCmd} ${quotedArgs.join(' ')}`);
                 } catch (e) {
                     // xargs command failed
                 }
@@ -1350,15 +1352,20 @@ async function processCommand(cmd) {
                 printError(`${error.message}`);
                 lastSuccess = false;
             }
+            if (pagerMode) break; // pager is active, stop chain
         }
-        await updateFileTree();
-        showPrompt();
+        if (!pagerMode) {
+            await updateFileTree();
+            showPrompt();
+        }
         return;
     }
 
     await executeSingleCommand(trimmedCmd);
-    await updateFileTree();
-    showPrompt();
+    if (!pagerMode) {
+        await updateFileTree();
+        showPrompt();
+    }
 }
 
 function expandEnvVars(str) {
@@ -2657,7 +2664,7 @@ function cmdWhich(args) {
         printError('which: missing argument');
         return;
     }
-    const available = ['ls', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'uniq', 'git', 'vi', 'vim', 'nano'];
+    const available = ['ls', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'echo', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'uniq', 'git', 'vi', 'vim', 'nano', 'tree', 'less', 'more', 'basename', 'dirname', 'stat', 'ln', 'seq', 'tac', 'rev', 'cut', 'tr', 'chmod', 'tee', 'xargs'];
     for (const cmd of args) {
         if (available.includes(cmd)) {
             printNormal(`/usr/bin/${cmd}`);
@@ -2674,7 +2681,7 @@ function cmdType(args) {
         return;
     }
     const builtins = ['cd', 'pwd', 'echo', 'export', 'history', 'alias', 'type', 'source'];
-    const available = ['ls', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'uniq', 'git', 'vi', 'vim', 'nano'];
+    const available = ['ls', 'cat', 'mkdir', 'touch', 'rm', 'cp', 'mv', 'grep', 'head', 'tail', 'wc', 'find', 'diff', 'sort', 'uniq', 'git', 'vi', 'vim', 'nano', 'tree', 'less', 'more', 'basename', 'dirname', 'stat', 'ln', 'seq', 'tac', 'rev', 'cut', 'tr', 'chmod', 'tee', 'xargs'];
     for (const cmd of args) {
         if (builtins.includes(cmd)) {
             printNormal(`${cmd} is a shell builtin`);
@@ -3875,7 +3882,7 @@ async function gitLog(args) {
                             if (cOid === pOid) return; // unchanged
 
                             let cContent = '', pContent = '';
-                            if (showPatch) {
+                            if (showPatch || showStat) {
                                 try { if (current) cContent = new TextDecoder().decode(await current.content()); } catch (e) { }
                                 try { if (parent) pContent = new TextDecoder().decode(await parent.content()); } catch (e) { }
                             }
@@ -3909,7 +3916,7 @@ async function gitLog(args) {
                                     insertions = Math.max(1, countLines(change.cContent));
                                 } else if (change.deleted) {
                                     deletions = Math.max(1, countLines(change.pContent));
-                                } else if (showPatch && change.cContent && change.pContent) {
+                                } else if (change.cContent && change.pContent) {
                                     // Use Diff library for accurate counts when content is available
                                     if (typeof Diff !== 'undefined') {
                                         const parts = Diff.diffLines(change.pContent, change.cContent);
@@ -3918,14 +3925,14 @@ async function gitLog(args) {
                                             if (p.added) insertions += n;
                                             else if (p.removed) deletions += n;
                                         });
+                                        // Diff found no changes but OIDs differ (e.g. whitespace/binary)
+                                        if (insertions === 0 && deletions === 0) { insertions = 1; deletions = 1; }
                                     } else {
                                         insertions = Math.max(1, countLines(change.cContent));
                                         deletions = Math.max(1, countLines(change.pContent));
                                     }
-                                    insertions = Math.max(1, insertions);
-                                    deletions = Math.max(1, deletions);
                                 } else {
-                                    // Without content (--stat only), show 1 as rough estimate
+                                    // Binary or empty content, rough estimate
                                     insertions = 1; deletions = 1;
                                 }
                                 totalInsert += insertions;
@@ -3939,14 +3946,14 @@ async function gitLog(args) {
                         }
 
                         if (showPatch && changes.length > 0) {
-                            for (const change of changes) {
-                                // Helper: split and strip trailing empty from final newline
-                                function splitContent(text) {
-                                    const lines = (text || '').split('\n');
-                                    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-                                    return lines;
-                                }
+                            // Helper: split and strip trailing empty from final newline
+                            function splitContent(text) {
+                                const lines = (text || '').split('\n');
+                                if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+                                return lines;
+                            }
 
+                            for (const change of changes) {
                                 if (change.added) {
                                     term.writeln(`\x1b[1mdiff --git a/${change.filepath} b/${change.filepath}\x1b[0m`);
                                     term.writeln(`\x1b[1mnew file mode 100644\x1b[0m`);
@@ -6994,7 +7001,7 @@ async function cmdTree(args) {
         for (const [filepath, H, W, S] of statusMatrix) {
             if (filepath.startsWith('.git/')) continue;
             if (H === 0 && W === 2 && S === 0) statusMap.set(filepath, '?');       // untracked
-            else if (H === 0 && S === 2) statusMap.set(filepath, 'A');              // new staged
+            else if (H === 0 && (S === 2 || S === 3)) statusMap.set(filepath, 'A'); // new staged (S=3: staged then modified)
             else if (H === 1 && W === 2 && S === 1) statusMap.set(filepath, 'M');   // modified unstaged
             else if (H === 1 && W === 2 && S === 2) statusMap.set(filepath, 'M');   // modified staged
             else if (H === 1 && W === 2 && S === 3) statusMap.set(filepath, 'M');   // modified both
@@ -7006,7 +7013,7 @@ async function cmdTree(args) {
 
     let fileCount = 0, dirCount = 0;
 
-    async function printTree(dirPath, prefix, isLast) {
+    async function printTree(dirPath, prefix) {
         let entries;
         try {
             entries = await pfs.readdir(dirPath);
@@ -7058,7 +7065,7 @@ async function cmdTree(args) {
             if (info.isDir) {
                 dirCount++;
                 term.writeln(`${prefix}${connector}\x1b[34m${info.name}/\x1b[0m${marker}`);
-                await printTree(info.fullPath, childPrefix, last);
+                await printTree(info.fullPath, childPrefix);
             } else {
                 fileCount++;
                 term.writeln(`${prefix}${connector}${info.name}${marker}`);
@@ -7068,7 +7075,7 @@ async function cmdTree(args) {
 
     const displayName = pathArg || '.';
     term.writeln(`\x1b[34m${displayName}\x1b[0m`);
-    await printTree(targetDir, '', true);
+    await printTree(targetDir, '');
     term.writeln('');
     term.writeln(`${dirCount} director${dirCount !== 1 ? 'ies' : 'y'}, ${fileCount} file${fileCount !== 1 ? 's' : ''}`);
     if (statusMap) {
@@ -7120,13 +7127,21 @@ function showPagerPage() {
         term.writeln('\x1b[7m(END)\x1b[0m  \x1b[90mPress q to quit\x1b[0m');
     } else {
         const pct = Math.round((end / pagerLines.length) * 100);
-        term.writeln(`\x1b[7m${pagerFilename} (${pct}%)\x1b[0m  \x1b[90m↓/Space: next page, ↑/b: prev page, q: quit\x1b[0m`);
+        term.writeln(`\x1b[7m${pagerFilename} (${pct}%)\x1b[0m  \x1b[90mSpace: next page, ↓/j: line, ↑/k: line up, b: page up, q: quit\x1b[0m`);
     }
 }
 
 function pagerScrollDown() {
     if (pagerOffset + pagerPageSize < pagerLines.length) {
         pagerOffset += pagerPageSize;
+        term.clear();
+        showPagerPage();
+    }
+}
+
+function pagerScrollDownLine() {
+    if (pagerOffset + pagerPageSize < pagerLines.length) {
+        pagerOffset += 1;
         term.clear();
         showPagerPage();
     }
@@ -7140,14 +7155,23 @@ function pagerScrollUp() {
     }
 }
 
-function exitPager() {
+function pagerScrollUpLine() {
+    if (pagerOffset > 0) {
+        pagerOffset -= 1;
+        term.clear();
+        showPagerPage();
+    }
+}
+
+async function exitPager() {
     pagerMode = false;
     pagerLines = [];
     pagerOffset = 0;
+    await updateFileTree();
     showPrompt();
 }
 
-async function cmdBasename(args) {
+function cmdBasename(args) {
     if (args.length === 0) {
         printError('basename: missing operand');
         return;
@@ -8238,10 +8262,14 @@ async function handleTermInput(data) {
     if (pagerMode) {
         const code = data.charCodeAt(0);
         if (data === 'q' || data === 'Q' || code === 3) { // q, Q, or Ctrl+C
-            exitPager();
-        } else if (data === ' ' || data === 'f' || data === '\x1b[B' || code === 13) { // Space, f, Down, Enter
+            await exitPager();
+        } else if (data === ' ' || data === 'f') { // Space, f = scroll full page
             pagerScrollDown();
-        } else if (data === 'b' || data === '\x1b[A') { // b, Up
+        } else if (data === '\x1b[B' || code === 13 || data === 'j') { // Down, Enter, j = scroll one line
+            pagerScrollDownLine();
+        } else if (data === '\x1b[A' || data === 'k') { // Up, k = scroll one line up
+            pagerScrollUpLine();
+        } else if (data === 'b') { // b = scroll full page up
             pagerScrollUp();
         } else if (data === 'g') { // go to top
             pagerOffset = 0;
