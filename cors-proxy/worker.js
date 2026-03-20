@@ -28,10 +28,24 @@ export default {
         }
 
         try {
+            // Forward relevant headers, stripping browser/proxy-specific ones
+            // that would confuse the target server (e.g., Host, Origin, Referer)
+            const forwardHeaders = new Headers();
+            for (const [key, value] of request.headers) {
+                const lower = key.toLowerCase();
+                if (lower === 'host' || lower === 'origin' || lower === 'referer' ||
+                    lower === 'cf-connecting-ip' || lower === 'cf-ray' ||
+                    lower === 'cf-ipcountry' || lower === 'cf-visitor' ||
+                    lower.startsWith('x-forwarded')) {
+                    continue;
+                }
+                forwardHeaders.set(key, value);
+            }
+
             // Create a new request to the target
             const targetRequest = new Request(targetUrl, {
                 method: request.method,
-                headers: request.headers,
+                headers: forwardHeaders,
                 body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
                 redirect: "follow"
             });
