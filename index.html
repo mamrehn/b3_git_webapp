@@ -79,19 +79,13 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://unpkg.com/@isomorphic-git/lightning-fs@4.6.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/buffer@6.0.3/index.min.js"></script>
-    <script>
-        if (typeof globalThis.Buffer === 'undefined') {
-            if (typeof buffer !== 'undefined' && buffer.Buffer) {
-                globalThis.Buffer = buffer.Buffer;
-            } else if (typeof Buffer !== 'undefined') {
-                globalThis.Buffer = Buffer;
-            }
-        }
-    </script>
     <script src="https://unpkg.com/isomorphic-git@1.36.3"></script>
     <script type="module">
-        // Load HTTP client as module (version-pinned)
+        // Load Buffer polyfill (ESM bundle includes base64-js and ieee754 deps)
+        import { Buffer } from 'https://cdn.jsdelivr.net/npm/buffer@6.0.3/+esm';
+        globalThis.Buffer = Buffer;
+
+        // Load HTTP client for isomorphic-git
         import http from 'https://unpkg.com/isomorphic-git@1.36.3/http/web/index.js';
         window.GitHttp = http;
     </script>
