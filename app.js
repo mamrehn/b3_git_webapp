@@ -36,11 +36,8 @@ window.addEventListener('resize', () => {
 
 // Constants
 const CORS_PROXIES = [
-    // 'https://<your-subdomain>.workers.dev/', // TODO: Uncomment and add your worker URL here
     'https://isomorphic-git-cors-proxy.mamrehn.workers.dev',
-    'https://cors.isomorphic-git.org',
-    // Note: corsproxy.io/?url= is incompatible with isomorphic-git's corsProxy option
-    // (the library constructs corsProxy + '/' + url, creating ?url=/https://... which breaks)
+    'https://isomorphic-git-cors-proxy.mamreh.workers.dev',
 ];
 let GIT_PROXY = CORS_PROXIES[0];
 const DEFAULT_REPO_URL = 'https://github.com/mamrehn/project1.git';
@@ -5465,6 +5462,7 @@ async function gitClone(args) {
     } else {
         printHint('All CORS proxies failed. Check your internet connection.');
         printHint('Make sure the repository URL is correct and the repository is public.');
+        printHint('For a reliable setup, deploy your own proxy — see cors-proxy-worker.js');
     }
 
     console.error('Clone error details:', lastError);

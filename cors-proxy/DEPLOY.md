@@ -37,12 +37,11 @@ This directory contains a Cloudflare Worker that acts as a CORS proxy for `isomo
 
     ```javascript
     const CORS_PROXIES = [
-        'https://isomorphic-git-cors-proxy.your-subdomain.workers.dev/', // <--- Your new URL
+        'https://isomorphic-git-cors-proxy.your-subdomain.workers.dev', // <--- Your new URL (no trailing slash!)
         'https://cors.isomorphic-git.org',
-        'https://corsproxy.io/?url=',
     ];
     ```
-4.  **Don't forget the trailing slash** (or check how your URL works, but usually it helps to keep format consistent).
+4.  **Do NOT add a trailing slash** — isomorphic-git constructs URLs as `corsProxy + '/' + url`, so a trailing slash would create a double slash that breaks requests.
 
 ## Testing
 

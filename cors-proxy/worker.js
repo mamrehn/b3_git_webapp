@@ -32,7 +32,7 @@ export default {
             const targetRequest = new Request(targetUrl, {
                 method: request.method,
                 headers: request.headers,
-                body: request.body,
+                body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
                 redirect: "follow"
             });
 
