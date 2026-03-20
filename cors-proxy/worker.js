@@ -18,13 +18,20 @@ export default {
 
         // The target URL is the path after the worker's domain
         // e.g. https://worker.dev/https://github.com/...
-        const targetUrl = url.pathname.slice(1) + url.search;
+        let targetUrl = url.pathname.slice(1) + url.search;
 
-        if (!targetUrl || !targetUrl.startsWith('http')) {
-            return new Response("Invalid URL. Usage: https://worker-url/https://target-url", {
-                status: 400,
+        if (!targetUrl) {
+            return new Response("CORS proxy for isomorphic-git. Usage: /<url>", {
+                status: 200,
                 headers: corsHeaders
             });
+        }
+
+        // isomorphic-git strips the protocol (https://) from the URL before
+        // prepending the corsProxy, so we receive "github.com/..." instead of
+        // "https://github.com/...". Re-add the protocol if missing.
+        if (!targetUrl.startsWith('http')) {
+            targetUrl = 'https://' + targetUrl;
         }
 
         try {

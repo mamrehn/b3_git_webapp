@@ -49,8 +49,9 @@ async function findWorkingProxy() {
     for (const proxy of CORS_PROXIES) {
         try {
             // Test with a lightweight request to GitHub's git info/refs
+            // isomorphic-git strips the protocol, so we test with the same format
             // increased timeout to 10s for slower connections
-            const testUrl = `${proxy}/https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`;
+            const testUrl = `${proxy}/github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack`;
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 10000);
