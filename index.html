@@ -4,6 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; connect-src *; img-src 'self' data:;">
     <title>Git Learning Terminal</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
@@ -16,8 +18,13 @@
 </head>
 
 <body>
+    <noscript>
+        <p style="color: #fff; background: #333; padding: 20px; text-align: center;">
+            This application requires JavaScript to run. Please enable JavaScript in your browser.
+        </p>
+    </noscript>
     <div class="container">
-        <div class="header">
+        <header class="header">
             <div>
                 <h1>Git Learning Terminal</h1>
                 <p>Safe environment to learn Git commands - Nothing can break here!</p>
@@ -25,39 +32,39 @@
             <div class="header-right">
                 <span id="connectionStatus" class="connection-status checking" title="Checking CORS proxy...">Checking
                     connection...</span>
-                <button id="resetBtn" class="reset-btn" title="Reset filesystem to initial state">🔄 Reset
+                <button type="button" id="resetBtn" class="reset-btn" title="Reset filesystem to initial state">🔄 Reset
                     Filesystem</button>
             </div>
-        </div>
+        </header>
 
-        <div class="main-content">
-            <div class="left-panel">
+        <main class="main-content">
+            <aside class="left-panel">
                 <div class="file-tree-container">
-                    <h3>File Tree</h3>
+                    <h2 class="file-tree-heading">File Tree</h2>
                     <div id="currentDir" class="current-dir">📁 ~</div>
-                    <div id="fileTree"></div>
+                    <div id="fileTree" role="tree"></div>
                 </div>
-            </div>
+            </aside>
 
             <div class="right-panel">
                 <div class="terminal-container">
-                    <div id="terminal"></div>
+                    <div id="terminal" role="application" aria-label="Git learning terminal"></div>
                 </div>
 
-                <div id="commandPreview" class="command-preview hidden"></div>
+                <div id="commandPreview" class="command-preview hidden" aria-live="polite"></div>
 
                 <div id="editorContainer" class="editor-container hidden">
                     <div class="editor-header">
                         <span id="editorTitle">Editor</span>
                         <div class="editor-actions">
-                            <button id="saveEditor" class="editor-icon-btn" title="Save (Ctrl+S)">
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <button type="button" id="saveEditor" class="editor-icon-btn" title="Save (Ctrl+S)">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                                     <path
                                         d="M13.5 1h-11C1.67 1 1 1.67 1 2.5v11c0 .83.67 1.5 1.5 1.5h11c.83 0 1.5-.67 1.5-1.5v-11c0-.83-.67-1.5-1.5-1.5zm-1 1v3.5c0 .28-.22.5-.5.5h-8c-.28 0-.5-.22-.5-.5V2h9zM3 14v-4.5c0-.28.22-.5.5-.5h9c.28 0 .5.22.5.5V14H3z" />
                                     <path d="M5 2h1v3H5zm5 0h1v3h-1z" />
                                 </svg>
                             </button>
-                            <button id="closeEditor" class="editor-icon-btn" title="Close (Ctrl+X)">✕</button>
+                            <button type="button" id="closeEditor" class="editor-icon-btn" title="Close (Ctrl+X)">✕</button>
                         </div>
                     </div>
                     <div id="editor" class="editor"></div>
@@ -66,16 +73,20 @@
                     </div>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://unpkg.com/@isomorphic-git/lightning-fs@4.6.0"></script>
-    <script src="https://bundle.run/buffer@6.0.3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/buffer@6.0.3/index.min.js"></script>
     <script>
         if (typeof globalThis.Buffer === 'undefined') {
-            globalThis.Buffer = buffer.Buffer;
+            if (typeof buffer !== 'undefined' && buffer.Buffer) {
+                globalThis.Buffer = buffer.Buffer;
+            } else if (typeof Buffer !== 'undefined') {
+                globalThis.Buffer = Buffer;
+            }
         }
     </script>
     <script src="https://unpkg.com/isomorphic-git@1.36.3"></script>

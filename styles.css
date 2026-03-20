@@ -67,12 +67,6 @@ body {
     border: 1px solid rgba(13, 188, 121, 0.3);
 }
 
-.connection-status.disconnected {
-    color: #f14c4c;
-    background-color: rgba(241, 76, 76, 0.1);
-    border: 1px solid rgba(241, 76, 76, 0.3);
-}
-
 .connection-status.warning {
     color: #faad14;
     background-color: rgba(250, 173, 20, 0.1);
@@ -102,6 +96,23 @@ body {
     transform: translateY(0);
 }
 
+/* Focus styles for keyboard navigation */
+:focus-visible {
+    outline: 2px solid #007acc;
+    outline-offset: 2px;
+}
+
+button:focus-visible {
+    outline: 2px solid #007acc;
+    outline-offset: 2px;
+}
+
+.editor-icon-btn:focus-visible {
+    outline: 2px solid #007acc;
+    outline-offset: 1px;
+    background-color: #094771;
+}
+
 .main-content {
     display: flex;
     flex: 1;
@@ -116,7 +127,8 @@ body {
     padding: 10px;
 }
 
-.file-tree-container h3 {
+.file-tree-container h3,
+.file-tree-container .file-tree-heading {
     color: #cccccc;
     font-size: 14px;
     margin-bottom: 10px;
@@ -154,12 +166,6 @@ body {
 }
 
 /* File Tree Styles */
-.tree-item {
-    padding: 3px 0;
-    cursor: pointer;
-    user-select: none;
-}
-
 .tree-folder, .tree-file {
     padding: 2px 5px;
     margin: 2px 0;
@@ -207,10 +213,6 @@ body {
     background-color: #4a4a4f !important;
 }
 
-.tree-children {
-    margin-left: 20px;
-}
-
 .folder-icon::before {
     content: "📁 ";
 }
@@ -220,11 +222,11 @@ body {
 }
 
 .hidden-folder {
-    color: #808080;
+    color: #a0a0a0;
 }
 
 .hidden-file {
-    color: #808080;
+    color: #a0a0a0;
 }
 
 /* Editor Styles */
@@ -337,21 +339,6 @@ body {
     border-top: 1px solid #3e3e42;
 }
 
-.editor-btn {
-    background-color: #0e639c;
-    color: #ffffff;
-    border: none;
-    padding: 8px 16px;
-    border-radius: 3px;
-    cursor: pointer;
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-    font-size: 13px;
-}
-
-.editor-btn:hover {
-    background-color: #1177bb;
-}
-
 .editor-help {
     color: #cccccc;
     font-size: 12px;
@@ -375,6 +362,12 @@ body {
     background: #4e4e4e;
 }
 
+/* Firefox scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #424242 #1e1e1e;
+}
+
 /* Fix emoji spacing in xterm - override negative letter-spacing for emoji characters */
 .xterm span[style*="letter-spacing"] {
     letter-spacing: 0px !important;
@@ -388,6 +381,38 @@ body {
 
     .connection-status {
         display: none;
+    }
+}
+
+@media (max-width: 600px) {
+    .main-content {
+        flex-direction: column;
+    }
+
+    .left-panel {
+        width: 100%;
+        max-height: 150px;
+        border-right: none;
+        border-bottom: 1px solid #3e3e42;
+    }
+
+    .header {
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px;
+    }
+
+    .header h1 {
+        font-size: 18px;
+    }
+
+    .header-right {
+        justify-content: flex-start;
+    }
+
+    .reset-btn {
+        padding: 6px 12px;
+        font-size: 12px;
     }
 }
 
@@ -424,9 +449,33 @@ body {
 }
 
 .command-preview .preview-syntax {
-    color: #6a6a6a;
+    color: #8a8a8a;
 }
 
 .command-preview .preview-desc {
     color: #b0b0b0;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .reset-btn:hover {
+        transform: none;
+    }
+
+    .clickable-file:hover,
+    .clickable-dir:hover {
+        transform: none;
+    }
+}
+
+/* Heading level normalization for semantic h2 used as tree heading */
+.file-tree-heading {
+    font-size: 14px;
+    font-weight: normal;
 }
