@@ -495,10 +495,8 @@ async function globMatch(baseDir, patternParts, prefix) {
                     const stat = await pfs.stat(fullPath);
                     if (stat.isDirectory()) {
                         const newPrefix = prefix ? prefix + '/' + entry : entry;
-                        // Continue matching ** in subdirectory
+                        // Continue matching ** in subdirectory (handles rest via line 488 in recursion)
                         results.push(...await globMatch(fullPath, patternParts, newPrefix));
-                        // Also try matching rest in subdirectory
-                        results.push(...await globMatch(fullPath, rest, newPrefix));
                     }
                 } catch (e) {}
             }
@@ -508,7 +506,7 @@ async function globMatch(baseDir, patternParts, prefix) {
 
     if (part.includes('*') || part.includes('?')) {
         const escaped = part.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp('^' + escaped.replace(/\\\*/g, '.*').replace(/\\\?/g, '.') + '$');
+        const regex = new RegExp('^' + escaped.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
         try {
             const entries = await pfs.readdir(baseDir);
             const results = [];
@@ -1016,13 +1014,11 @@ async function processPipedCommands(fullCommand) {
         const originalWriteln = term.writeln.bind(term);
         const originalWrite = term.write.bind(term);
         let capturedLines = [];
-        let capturing = false;
 
         function startCapture() {
-            capturing = true;
             capturedLines = [];
             term.writeln = (text) => {
-                if (text !== '') capturedLines.push(text);
+                capturedLines.push(text != null ? text : '');
             };
             term.write = (text) => {
                 if (text !== '') capturedLines.push(text);
@@ -1030,7 +1026,6 @@ async function processPipedCommands(fullCommand) {
         }
 
         function stopCapture() {
-            capturing = false;
             term.writeln = originalWriteln;
             term.write = originalWrite;
             return capturedLines.join('\n');
@@ -1054,11 +1049,13 @@ async function processPipedCommands(fullCommand) {
                         output += content;
                     } catch (e) { }
                 }
+                // Normalize: remove trailing newline to match captured output format
+                if (output.endsWith('\n')) output = output.slice(0, -1);
             } else if (firstCommand === 'echo') {
                 output = processEchoText(firstCmd.replace(/^echo\s*/, ''));
             } else if (firstCommand === 'ls') {
                 const targetDir = firstArgs.length > 0 && !firstArgs[0].startsWith('-') ? resolvePath(firstArgs[0]) : currentDir;
-                const showHidden = firstArgs.some(a => a.includes('a'));
+                const showHidden = firstArgs.some(a => a.startsWith('-') && a.includes('a'));
                 try {
                     const files = await pfs.readdir(targetDir);
                     const filtered = showHidden ? files : files.filter(f => !f.startsWith('.'));
@@ -1153,14 +1150,18 @@ async function processPipedCommands(fullCommand) {
             } else if (pipeCommand === 'wc') {
                 const showL = pipeArgs.includes('-l') || pipeArgs.length === 0;
                 const showW = pipeArgs.includes('-w') || pipeArgs.length === 0;
-                const lines = output.split('\n');
+                // Count lines: split and remove trailing empty element from final newline
+                const wcLines = output.split('\n');
+                if (wcLines.length > 0 && wcLines[wcLines.length - 1] === '') wcLines.pop();
+                const lineCount = wcLines.length;
                 const words = output.split(/\s+/).filter(w => w).length;
                 let result = '';
-                if (showL) result += String(lines.length).padStart(8);
+                if (showL) result += String(lineCount).padStart(8);
                 if (showW) result += String(words).padStart(8);
                 output = result;
             } else if (pipeCommand === 'sort') {
                 const lines = output.split('\n');
+                if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
                 const reverse = pipeArgs.includes('-r');
                 const numeric = pipeArgs.includes('-n');
                 lines.sort((a, b) => {
@@ -1171,6 +1172,7 @@ async function processPipedCommands(fullCommand) {
                 output = lines.join('\n');
             } else if (pipeCommand === 'uniq') {
                 const lines = output.split('\n');
+                if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
                 output = lines.filter((line, i) => i === 0 || line !== lines[i - 1]).join('\n');
             } else if (pipeCommand === 'cat') {
                 // cat with no args in pipe = passthrough (no-op)
@@ -1231,8 +1233,11 @@ async function processPipedCommands(fullCommand) {
                 const cutFlags = {};
                 for (let j = 0; j < pipeArgs.length; j++) {
                     if (pipeArgs[j] === '-d' && j + 1 < pipeArgs.length) cutFlags.delimiter = pipeArgs[++j].replace(/^["']|["']$/g, '');
+                    else if (pipeArgs[j].startsWith('-d') && pipeArgs[j].length > 2) cutFlags.delimiter = pipeArgs[j].slice(2).replace(/^["']|["']$/g, '');
                     else if (pipeArgs[j] === '-f' && j + 1 < pipeArgs.length) cutFlags.fields = pipeArgs[++j];
+                    else if (pipeArgs[j].startsWith('-f') && pipeArgs[j].length > 2) cutFlags.fields = pipeArgs[j].slice(2);
                     else if (pipeArgs[j] === '-c' && j + 1 < pipeArgs.length) cutFlags.chars = pipeArgs[++j];
+                    else if (pipeArgs[j].startsWith('-c') && pipeArgs[j].length > 2) cutFlags.chars = pipeArgs[j].slice(2);
                 }
                 if (cutFlags.fields || cutFlags.chars) {
                     function parseCutSpec(spec) {
@@ -1259,7 +1264,9 @@ async function processPipedCommands(fullCommand) {
                     }).join('\n');
                 }
             } else if (pipeCommand === 'tac') {
-                output = output.split('\n').reverse().join('\n');
+                const tacLines = output.split('\n');
+                if (tacLines.length > 0 && tacLines[tacLines.length - 1] === '') tacLines.pop();
+                output = tacLines.reverse().join('\n');
             } else if (pipeCommand === 'rev') {
                 output = output.split('\n').map(l => [...l].reverse().join('')).join('\n');
             } else {
@@ -1435,7 +1442,7 @@ async function executeDispatch(trimmedCmd) {
     let args = parts.slice(1);
 
     // Expand globs for file-operating commands
-    const globCommands = ['ls', 'cat', 'rm', 'cp', 'mv', 'head', 'tail', 'wc', 'grep', 'touch', 'git', 'less', 'more', 'stat', 'ln', 'tac', 'rev', 'cut', 'chmod'];
+    const globCommands = ['ls', 'cat', 'rm', 'cp', 'mv', 'head', 'tail', 'wc', 'grep', 'touch', 'git', 'less', 'more', 'stat', 'ln', 'tac', 'rev', 'cut', 'chmod', 'diff', 'sort', 'uniq', 'tree'];
     if (globCommands.includes(command)) {
         args = await expandGlobs(args);
     }
@@ -2583,7 +2590,7 @@ async function cmdFind(args) {
                         // Name matching with glob support
                         if (namePattern) {
                             const escaped = namePattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-                            const regex = new RegExp('^' + escaped.replace(/\\\*/g, '.*').replace(/\\\?/g, '.') + '$');
+                            const regex = new RegExp('^' + escaped.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
                             if (regex.test(entry)) {
                                 printNormal(displayPath);
                             }
@@ -2729,6 +2736,8 @@ async function cmdSort(args) {
         }
     }
     let lines = content.split('\n');
+    // Remove trailing empty element from final newline
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
     lines.sort((a, b) => {
         if (numeric) return parseFloat(a) - parseFloat(b);
         return a.localeCompare(b);
@@ -2759,6 +2768,8 @@ async function cmdUniq(args) {
         }
     }
     const lines = content.split('\n');
+    // Remove trailing empty element from final newline
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
     const result = [];
     let prevLine = null;
     let count = 0;
@@ -3414,12 +3425,13 @@ async function gitLog(args) {
         const dir = await git.findRoot({ fs, filepath: currentDir });
 
         // Parse flags
-        const showGraph = args.includes('--graph');
-        const showOneline = args.includes('--oneline');
-        const showAll = args.includes('--all');
-        const showDecorate = args.includes('--decorate') || showOneline;
         const showStat = args.includes('--stat');
         const showPatch = args.includes('-p') || args.includes('--patch');
+        // --stat and -p require standard format; override --oneline/--graph
+        const showGraph = args.includes('--graph') && !showStat && !showPatch;
+        const showOneline = args.includes('--oneline') && !showStat && !showPatch;
+        const showAll = args.includes('--all');
+        const showDecorate = args.includes('--decorate') || args.includes('--oneline');
 
         // Parse -n / -<number> for max count
         let maxCount = null;
@@ -7115,6 +7127,7 @@ function startPager(lines, filename) {
     pagerOffset = 0;
     pagerFilename = filename || '';
     pagerPageSize = Math.max(10, (term.rows || 24) - 2);
+    term.clear();
     showPagerPage();
 }
 
@@ -7140,7 +7153,7 @@ function pagerScrollDown() {
 }
 
 function pagerScrollDownLine() {
-    if (pagerOffset + pagerPageSize < pagerLines.length) {
+    if (pagerOffset + 1 + pagerPageSize <= pagerLines.length) {
         pagerOffset += 1;
         term.clear();
         showPagerPage();
@@ -7314,7 +7327,9 @@ async function cmdTac(args) {
     for (const filename of args) {
         try {
             const content = await pfs.readFile(resolvePath(filename), 'utf8');
-            const lines = content.split('\n');
+            let lines = content.split('\n');
+            // Remove trailing empty element from final newline
+            if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
             lines.reverse();
             lines.forEach(l => term.writeln(l));
         } catch (e) {
@@ -7345,10 +7360,16 @@ async function cmdCut(args) {
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '-d' && i + 1 < args.length) {
             flags.delimiter = args[++i].replace(/^["']|["']$/g, '');
+        } else if (args[i].startsWith('-d') && args[i].length > 2) {
+            flags.delimiter = args[i].slice(2).replace(/^["']|["']$/g, '');
         } else if (args[i] === '-f' && i + 1 < args.length) {
             flags.fields = args[++i];
+        } else if (args[i].startsWith('-f') && args[i].length > 2) {
+            flags.fields = args[i].slice(2);
         } else if (args[i] === '-c' && i + 1 < args.length) {
             flags.chars = args[++i];
+        } else if (args[i].startsWith('-c') && args[i].length > 2) {
+            flags.chars = args[i].slice(2);
         } else if (!args[i].startsWith('-')) {
             fileArgs.push(args[i]);
         }
@@ -7421,7 +7442,7 @@ async function cmdTr(args) {
     }
 
     // tr is primarily used in pipes; if there's a file arg, use it
-    const fileArg = args[deleteMode ? 2 : 2];
+    const fileArg = args[2];
     if (fileArg) {
         try {
             const content = await pfs.readFile(resolvePath(fileArg), 'utf8');
