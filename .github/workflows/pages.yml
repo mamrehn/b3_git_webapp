@@ -1,0 +1,43 @@
+# Publishes the app to https://mamrehn.github.io/b3_git_webapp/ on every push to main.
+# Needs once: Settings → Pages → Build and deployment → Source: "GitHub Actions".
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. A newer push waits instead of cancelling a running deployment.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-26.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Only what the page loads. Tests, the proxy source and the docs stay out of the site.
+      # No Jekyll: the files are published exactly as they are in the repository.
+      - name: Collect site files
+        run: |
+          mkdir _site
+          cp -r index.html assets css src vendor _site/
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,172 +1,87 @@
-# Git Learning Terminal
+# Git-Werkstatt
 
-An interactive web-based terminal application for learning Git commands in a safe, sandboxed environment. Perfect for embedding in Learning Management Systems (LMS) via iframe.
+Learn git and the command line in the browser, with real commands and an explanation of every step. Nothing to install. Made for vocational-school classes; the interface is German by default and can be switched to English (git's own output stays English, as in real git).
 
-## Features
+**Open it:** https://mamrehn.github.io/b3_git_webapp/
 
-### 🎯 Core Functionality
-- **Full Terminal Emulation**: Powered by xterm.js for a realistic terminal experience
-- **Git Operations**: Implemented using isomorphic-git for authentic Git behavior
-- **🆕 Real GitHub Integration**: Automatically clones actual repositories from GitHub using CORS proxy
-- **In-Browser File System**: Uses LightningFS (IndexedDB) for persistent storage within the session
-- **Safe Learning Environment**: Nothing can break - resets on page reload
+## What students get
 
-### 📁 File System Commands
-- `ls` - List directory contents (use `-a` for hidden files)
-- `ll` - Alias for `ls -la` (list all with details)
-- `cd` - Change directory
-- `pwd` - Print working directory
-- `cat` - Display file contents
-- `mkdir` - Create directories
-- `touch` - Create empty files
-- `rm` - Remove files
-- `vi/vim/nano/edit` - Open the built-in text editor
-- `history` - Show command history
-- `clear` - Clear terminal screen
-- `reset` - Reset filesystem to initial state
+- **Terminal**: a bash-like shell with about 60 commands (pipes, redirection, `grep`, `sed`, `find`, …) and git built on isomorphic-git. `help` lists everything. Git's output follows real git's wording; the tests compare it byte for byte with real git.
+- **Coach**: after every command it explains what happened, where you are now and what to do next. While you type, a line below the prompt says what the command will do.
+- **Views**: *Files* (with the status codes of `git status -s`), *Areas* (working directory → staging area → repository → server) and *History* (commits drawn as a metro map).
+- **Missions**: 20 guided tasks in five lines: shell basics (optional), git basics, branches, teamwork, pro tools. A mission checks the state of the repository, so any correct solution counts, and hints get more specific step by step. Servers and teammates are simulated (`git.sim`).
+- **Sandbox**: free play. On first start it clones [mamrehn/project1](https://github.com/mamrehn/project1) into `~/project1`. Remotes here are real servers such as GitHub, reached through a [CORS proxy](#cors-proxy). Simulated servers are marked differently, so students always know which kind they are talking to.
+- **Undo**: a button that restores files and git data to the state before the last command.
+- **Editor**: `nano`, `vi`, `code` and friends open files in a built-in editor (CodeMirror).
+- **Accessibility**: keyboard navigation, an optional screen-reader mode, light and dark theme.
 
-### 🔧 Git Commands
-**Repository Setup & Configuration**
-- `git init` - Initialize a repository
-- `git config` - Get and set configuration options
-- `git remote` - Manage remotes (add, remove, rename, set-url)
+## Run it locally
 
-**Basic Snapshotting**
-- `git status` - Show working tree status
-- `git add` - Stage files
-- `git commit` - Commit changes (support `-m`, `--amend`)
-- `git restore` - Restore working tree files
-- `git reset` - Reset current HEAD (`--soft`, `--mixed`, `--hard`)
-- `git rm` - Remove files from working tree and index
-- `git mv` - Move or rename files
-- `git clean` - Remove untracked files
+There is no build step, but the app uses JavaScript modules, so it has to be served over HTTP. Opening `index.html` directly as a file does not work.
 
-**Branching & Merging**
-- `git branch` - List/create branches
-- `git checkout` - Switch branches or restore files
-- `git switch` - Switch branches (modern)
-- `git merge` - Merge branches
-- `git rebase` - Reapply commits on top of another base tip
-
-**Inspecting & Comparing**
-- `git log` - View commit history
-- `git show` - Show commit details and diffs
-- `git diff` - Show changes
-- `git tag` - Create, list, delete tags
-- `git blame` - Show what revision and author last modified each line
-- `git reflog` - Manage reflog information
-- `git shortlog` - Summarize git log output
-
-**Sharing & Updating**
-- `git fetch` - Download objects from remote
-- `git push` - Push to remote
-- `git pull` - Pull from remote
-- `git clone` - Clone repository
-
-**Patching**
-- `git cherry-pick` - Apply changes from a specific commit
-- `git revert` - Create a new commit that undoes a commit
-
-**Temporary Commits**
-- `git stash` - Stash changes (push, pop, apply, list, show, drop, clear)
-
-### 🎨 Learning Features
-- **Color-Coded Output**:
-  - White text: Standard Git output
-  - Green text: Educational hints and tips
-  - Red text: Errors and warnings
-- **Contextual Hints**: Automatic hints after commands to guide learning
-- **File Tree View**: Real-time visualization of the project structure with clickable files
-- **Syntax Highlighting**: Code editor with support for HTML, CSS, JavaScript, Python, Markdown, and Shell
-- **Hidden Files Display**: Shows `.git/`, `.gitignore`, etc. (but not `.git/` contents)
-- **Advanced Terminal Features**:
-  - Tab completion for commands and files
-  - Command history navigation (↑/↓ arrow keys)
-  - Reverse history search (Ctrl+R)
-  - Cursor positioning (←/→ arrow keys)
-  - Pipe support for filtering (`history | grep pattern`)
-
-### 📚 Pre-configured Projects
-- **project1**: 🆕 **Cloned from real GitHub repository!**
-  - Automatically clones `https://github.com/mamrehn/project1.git`
-  - Real commit history from GitHub
-  - Authentic Git repository experience
-  - Uses CORS proxy for browser access
-  - Falls back to sample project if cloning fails
-- **project2**: Empty directory for students to initialize themselves
-
-## Installation
-
-Simply open `index.html` in a web browser. No build process or server required!
-
-### For LMS Integration
-Embed using an iframe:
-
-```html
-<iframe src="path/to/index.html" width="100%" height="800px" frameborder="0"></iframe>
+```sh
+python3 -m http.server 8000
+# then open http://localhost:8000/
 ```
 
-## Usage
+Students' files are stored in their browser (IndexedDB), separately for each browser and device. The sandbox survives a reload; a mission starts from a fresh state every time.
 
-1. **Start Exploring**: The terminal opens in the home directory with two projects available
-2. **Navigate**: Use `cd project1` or `cd project2` to enter a project
-3. **Try Git Commands**: All basic Git operations are available
-4. **Edit Files**: Use `vi filename.txt` or `nano filename.txt` to open the editor
-5. **View File Tree**: The left panel shows the current directory structure in real-time
+## Embed it in a learning platform
 
-## Learning Path Suggestions
+```html
+<iframe src="https://mamrehn.github.io/b3_git_webapp/" title="Git-Werkstatt"
+        width="100%" height="800" style="border: 0"></iframe>
+```
 
-### Beginners
-1. Start in `project1` and use `git status` to see the current state
-2. Use `git log` to see existing commits
-3. Modify `index.html` using `vi index.html`
-4. Practice staging and committing: `git add index.html`, then `git commit -m "My change"`
+## Configuration
 
-### Intermediate
-1. Navigate to `project2` and initialize Git: `git init`
-2. Create files: `touch README.md`
-3. Practice the full workflow: create → add → commit
-4. Experiment with branches: `git branch feature`, `git checkout feature`
+Settings a teacher may want to change are in [`src/config.js`](src/config.js):
 
-### Advanced
-1. Practice with remotes (simulated): `git remote add origin <url>`
-2. Try push/pull operations
-3. Experiment with `git reset` and `git diff`
-4. Create multiple branches and switch between them
+| Setting | Meaning |
+|---|---|
+| `corsProxies` | CORS proxies for real remotes. Add your own proxy here **and** to `connect-src` in the Content-Security-Policy in [`index.html`](index.html). |
+| `sandboxRepo` | Repository cloned into `~/project1` when the sandbox opens for the first time. |
+| `simulatedHost` | Host name of the simulated server in missions. Never a real host. |
+| `realCloneDepth` | How much history real clones fetch (`0` = all). Set it, e.g. to `50`, if students clone large repositories: a full clone of a big project can freeze the tab and fill the browser's storage. |
 
-## Technical Details
+## CORS proxy
 
-### Technologies Used
-- **xterm.js**: Terminal emulation
-- **isomorphic-git**: Git implementation for browsers
-- **LightningFS**: In-memory/IndexedDB file system
-- **Vanilla JavaScript**: No framework dependencies
+Browsers may not talk to git servers directly, so in the sandbox every real `git clone`, `fetch`, `pull` and `push` goes through a small Cloudflare Worker in [`cors-proxy/`](cors-proxy/). It forwards only git requests to known git hosts (GitHub, GitLab, Codeberg, Bitbucket), so it cannot be misused as an open proxy. Missions never use it. How to deploy your own: [`cors-proxy/DEPLOY.md`](cors-proxy/DEPLOY.md).
 
-### Browser Compatibility
-- Chrome/Edge: ✅ Full support
-- Firefox: ✅ Full support
-- Safari: ✅ Full support
+## Publishing
 
-### Limitations
-- File system resets on page reload (intentional for learning)
-- No actual remote server communication (simulated for safety)
-- Large file operations may be slower than native Git
+Every push to `main` runs [`.github/workflows/pages.yml`](.github/workflows/pages.yml), which publishes `index.html`, `src/`, `css/`, `vendor/` and `assets/` to GitHub Pages. In a fork, set *Settings → Pages → Source* to **GitHub Actions** once.
 
-## Customization
+## Tests
 
-### Changing Pre-loaded Content
-Edit the `setupProject1()` function in `app.js` to modify the initial repository state.
+```sh
+cd tests
+npm ci
+npm test
+```
 
-### Adding New Commands
-Extend the `processCommand()` function to add custom commands or Git workflows.
+The Node tests cover the shell, the git commands, the coach, every mission and the CORS proxy. Many of them run the same commands in real git and compare the output, so `git` and `bash` must be installed.
 
-### Modifying Hints
-Edit the hint messages throughout `app.js` - all hints use the `printHint()` function with green color.
+## Project layout
+
+```
+index.html       the page; its Content-Security-Policy lists the allowed proxies
+src/main.js      entry point; src/app.js connects the parts
+src/config.js    settings (see above)
+src/core/        languages, texts, shared helpers
+src/shell/       command line parser and shell commands
+src/git/         git commands on top of isomorphic-git, simulated git server
+src/learn/       the coach: explanations, situation detection, suggestions
+src/missions/    mission engine; content/ holds the missions
+src/ui/          terminal, file tree, editor, history view, help
+src/vfs/         the file systems (sandbox, missions) and undo
+css/             styles
+vendor/          third-party libraries, stored here instead of loaded from a CDN (see vendor/README.md)
+assets/          icon and self-hosted fonts
+cors-proxy/      the Cloudflare Worker for real remotes
+tests/           Node tests
+```
 
 ## License
 
-Free to use for educational purposes.
-
-## Contributing
-
-This is an educational tool. Feel free to fork and adapt for your teaching needs!
+Free to use for educational purposes. Fork it and adapt it for your own teaching.
