@@ -1,0 +1,4 @@
+{
+  "description": "Marks the browser source as ES modules for the Node test runner. Browsers ignore this file.",
+  "type": "module"
+}

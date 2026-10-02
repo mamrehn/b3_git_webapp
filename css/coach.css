@@ -1,0 +1,687 @@
+/* The coach column: mission card, what just happened, what you can do, where you are. */
+
+.coach-body {
+    padding: 0 0 24px;
+}
+
+.coach-body > section {
+    padding: 14px var(--pane-pad) 4px;
+}
+
+.coach-body > section > .label {
+    margin-bottom: 8px;
+}
+
+.coach-body > section + section {
+    border-top: 1px solid var(--rule);
+    margin-top: 10px;
+}
+
+.coach-body p {
+    margin: 0 0 8px;
+}
+
+.coach-body ul,
+.coach-body ol {
+    margin: 0 0 8px;
+    padding-left: 18px;
+}
+
+.coach-idle {
+    color: var(--ink-2);
+}
+
+/* inline commands are buttons that put the command into the prompt */
+.cmd-inline {
+    display: inline;
+    padding: 0 4px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    background: var(--sheet);
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.cmd-inline:hover {
+    border-color: var(--ink);
+}
+
+.coach-body code,
+.sheet code,
+.dialog code {
+    padding: 0 3px;
+    border-radius: 2px;
+    background: var(--shade);
+}
+
+.term {
+    display: inline;
+    padding: 0;
+    border: none;
+    border-bottom: 1px dotted var(--ink-3);
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: help;
+}
+
+.term:hover {
+    border-bottom-color: var(--ink);
+}
+
+/* ---- latest entry ---- */
+.entry {
+    position: relative;
+}
+
+.entry-cmd {
+    margin-bottom: 4px;
+    color: var(--ink-3);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.prompt-sign {
+    color: var(--staged);
+    font-weight: 700;
+}
+
+.entry-title {
+    margin: 0 0 6px;
+    font-size: 15px;
+    line-height: 1.3;
+}
+
+.entry.tone-error .entry-title,
+.entry.tone-danger .entry-title {
+    color: var(--danger);
+}
+
+.entry.tone-warn .entry-title {
+    color: var(--wd);
+}
+
+.entry.tone-success .entry-title {
+    color: var(--staged);
+}
+
+.entry-body {
+    font-size: 13.5px;
+}
+
+.entry-note {
+    margin: 8px 0;
+    padding: 6px 10px;
+    border-left: 3px solid var(--repo);
+    background: var(--shade);
+    font-size: 13px;
+}
+
+.entry-note p:last-child {
+    margin-bottom: 0;
+}
+
+.entry-note.tone-success { border-left-color: var(--staged); background: var(--staged-soft); }
+.entry-note.tone-warn { border-left-color: var(--wd); background: var(--wd-soft); }
+.entry-note.tone-danger,
+.entry-note.tone-error { border-left-color: var(--danger); background: var(--danger-soft); }
+.entry-note.tone-sim { border-left-color: var(--sim); background: var(--hatch-sim); }
+
+.entry-more {
+    margin-top: 6px;
+    font-size: 13px;
+}
+
+.entry-more summary,
+.journal summary,
+.mcard-story summary {
+    cursor: pointer;
+    color: var(--ink-2);
+    font-weight: 600;
+}
+
+.entry-more[open] summary {
+    margin-bottom: 6px;
+}
+
+.entry.collapsed .entry-body,
+.entry.collapsed .entry-more {
+    display: none;
+}
+
+.entry.collapsed .entry-note:not(.tone-success) {
+    display: none;
+}
+
+.entry-expand {
+    margin-bottom: 4px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--repo);
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.entry.collapsed .entry-expand + .entry-body {
+    display: none;
+}
+
+/* ---- suggestions: the "exits" of the current situation ---- */
+.suggestions {
+    margin: 0 !important;
+    padding: 0 !important;
+    list-style: none;
+}
+
+.suggestion {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) 18px;
+    align-items: start;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 6px;
+    border: none;
+    border-radius: var(--radius);
+    background: none;
+    text-align: left;
+}
+
+.suggestion:hover,
+.suggestion:focus-visible {
+    background: var(--shade);
+}
+
+.sug-key {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    margin-top: 1px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    color: var(--ink-3);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.sug-main {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+}
+
+.sug-cmd .nowrap {
+    white-space: nowrap;
+}
+
+.sug-cmd {
+    color: var(--ink);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+    background: none !important;
+    padding: 0 !important;
+}
+
+.sug-why {
+    color: var(--ink-2);
+    font-size: 12.5px;
+}
+
+.sug-why code {
+    font-size: 0.95em;
+}
+
+.suggestion > .icon,
+.sug-danger .icon {
+    margin-top: 2px;
+    color: var(--ink-3);
+}
+
+.suggestion.danger .sug-cmd {
+    color: var(--danger);
+}
+
+.sug-danger .icon {
+    color: var(--danger);
+}
+
+.coach-tip {
+    margin: 6px 0 0 !important;
+    color: var(--ink-3);
+    font-size: 11.5px;
+}
+
+/* ---- where you are ---- */
+.facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 5px 12px;
+    margin: 0 0 6px;
+    font-size: 13px;
+}
+
+.facts dt {
+    padding-top: 1px;
+    color: var(--ink-3);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.facts dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.facts dd.tone-muted { color: var(--ink-3); }
+.facts dd.tone-warn { color: var(--wd); }
+.facts dd.tone-danger { color: var(--danger); font-weight: 600; }
+
+.facts .net {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+}
+
+.fact-note {
+    display: block;
+    color: var(--ink-3);
+    font-size: 12px;
+}
+
+/* ---- journal ---- */
+.journal > summary {
+    margin-bottom: 6px;
+}
+
+.journal-item {
+    border-top: 1px solid var(--rule);
+}
+
+.journal-item > summary {
+    padding: 6px 0;
+    font-weight: 500;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.journal-item > summary code {
+    color: var(--ink);
+}
+
+.journal-item .entry {
+    padding: 0 0 10px 14px;
+}
+
+.journal-item .entry-cmd {
+    display: none;
+}
+
+/* glossary popover */
+.term-pop {
+    position: fixed;
+    z-index: 95;
+    width: 320px;
+    padding: 12px 14px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+    background: var(--sheet);
+    box-shadow: var(--shadow-pop);
+    font-size: 13px;
+}
+
+.term-pop strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 14px;
+}
+
+.term-pop p {
+    margin: 0 0 6px;
+}
+
+/* ---- mission card: the objectives are stations on a line ---- */
+.mission-slot[hidden] {
+    display: none;
+}
+
+.mission-slot {
+    padding: 12px var(--pane-pad) 0 !important;
+}
+
+.mcard {
+    border: 1px solid var(--rule);
+    border-left: 5px solid var(--line, var(--repo));
+    border-radius: var(--radius);
+    background: var(--sheet);
+    padding: 10px 12px 12px;
+}
+
+.mcard.preparing,
+.mcard.empty {
+    border-left-color: var(--sim);
+    background: var(--sheet);
+}
+
+.mcard.empty p {
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.mcard-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -2px -4px 2px 0;
+}
+
+.mcard-head .spacer {
+    flex: 1;
+}
+
+.mcard-head .icon-btn {
+    width: 26px;
+    height: 26px;
+}
+
+.mcard-code {
+    padding: 1px 6px;
+    border-radius: 2px;
+    background: var(--line, var(--repo));
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 700;
+}
+
+.mcard-kicker {
+    color: var(--ink-3);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.mcard-title {
+    margin: 4px 0 8px;
+    font-size: 17px;
+    line-height: 1.25;
+}
+
+.mcard-story {
+    margin-bottom: 10px;
+    font-size: 13px;
+}
+
+.mcard-story[open] > summary {
+    margin-bottom: 6px;
+}
+
+.objectives {
+    position: relative;
+    margin: 0 !important;
+    padding: 0 !important;
+    list-style: none;
+}
+
+/* the line through the stations */
+.objectives::before {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 12px;
+    bottom: 12px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--line, var(--repo));
+    opacity: 0.35;
+}
+
+.obj {
+    position: relative;
+    display: grid;
+    grid-template-columns: 23px minmax(0, 1fr);
+    gap: 9px;
+    padding: 4px 0;
+    font-size: 13px;
+}
+
+.obj-mark {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 23px;
+    height: 23px;
+    border: 2px solid var(--rule-strong);
+    border-radius: 50%;
+    background: var(--sheet);
+    color: var(--ink-3);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.obj.done .obj-mark {
+    border-color: var(--line, var(--repo));
+    background: var(--line, var(--repo));
+    color: #fff;
+}
+
+.obj.done .obj-mark .icon {
+    width: 13px;
+    height: 13px;
+    stroke-width: 2.4;
+}
+
+.obj.current .obj-mark {
+    border: 3px solid var(--line, var(--repo));
+    color: var(--ink);
+}
+
+.obj-text {
+    padding-top: 2px;
+}
+
+.obj.done .obj-text {
+    color: var(--ink-3);
+}
+
+.obj.todo .obj-text {
+    color: var(--ink-3);
+}
+
+.obj.current .obj-text {
+    color: var(--ink);
+    font-weight: 600;
+}
+
+.obj.just-done .obj-mark {
+    animation: station-done 0.9s ease-out;
+}
+
+@keyframes station-done {
+    0% { box-shadow: 0 0 0 0 var(--line, var(--repo)); }
+    100% { box-shadow: 0 0 0 10px transparent; }
+}
+
+.obj-hint {
+    margin: 6px 0 2px;
+    padding: 6px 9px;
+    border-left: 3px dashed var(--line, var(--repo));
+    background: var(--shade);
+    font-size: 12.5px;
+    font-weight: 400;
+}
+
+.obj-hint p {
+    margin: 0;
+}
+
+.obj-hint.final {
+    border-left-style: solid;
+}
+
+.hint-btn {
+    height: 26px;
+    margin-top: 4px;
+    padding: 0 8px 0 6px;
+    font-size: 12px;
+}
+
+.hint-btn .icon {
+    width: 14px;
+    height: 14px;
+}
+
+/* debrief */
+.debrief {
+    font-size: 13.5px;
+}
+
+.debrief-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding: 2px 9px 2px 6px;
+    border-radius: 11px;
+    background: var(--staged);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.debrief-badge .icon {
+    width: 14px;
+    height: 14px;
+    stroke-width: 2.4;
+}
+
+.learned {
+    margin: 10px 0;
+}
+
+.learned .label {
+    margin-bottom: 6px;
+}
+
+.learned-cmds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.chip {
+    padding: 2px 7px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    background: var(--panel);
+    font-size: 12px;
+    color: var(--ink);
+}
+
+button.chip:hover {
+    border-color: var(--ink);
+}
+
+.debrief-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.debrief-free {
+    margin: 8px 0 0 !important;
+    color: var(--ink-3);
+    font-size: 12px;
+}
+
+/* ---- breadcrumb in the top bar ---- */
+.mission-crumb[hidden] {
+    display: none;
+}
+
+.crumb-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 380px;
+    height: 30px;
+    padding: 0 10px 0 6px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--sheet);
+    font-size: 13px;
+}
+
+.crumb-btn:hover {
+    border-color: var(--ink-3);
+}
+
+.crumb-code {
+    padding: 0 5px;
+    border-radius: 2px;
+    background: var(--sim);
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.crumb-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.progress-dots {
+    display: flex;
+    gap: 3px;
+}
+
+.pdot {
+    width: 7px;
+    height: 7px;
+    border: 1.5px solid var(--ink-3);
+    border-radius: 50%;
+}
+
+.pdot.done {
+    border-color: var(--staged);
+    background: var(--staged);
+}
+
+.pdot.current {
+    border-color: var(--ink);
+    border-width: 2px;
+}
+
+.sr-only {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}

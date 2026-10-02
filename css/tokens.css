@@ -1,0 +1,147 @@
+/* Design tokens. Colour carries meaning; decoration does not.
+   Paper = surfaces for reading, ink = text, signal colours = git states. */
+
+@font-face {
+    font-family: 'Atkinson Hyperlegible Next';
+    font-style: normal;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('../assets/fonts/atkinson-next-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: 'Atkinson Hyperlegible Next';
+    font-style: normal;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('../assets/fonts/atkinson-next-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: 'Atkinson Hyperlegible Next';
+    font-style: italic;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('../assets/fonts/atkinson-next-italic-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: 'Atkinson Hyperlegible Next';
+    font-style: italic;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('../assets/fonts/atkinson-next-italic-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: 'Atkinson Hyperlegible Mono';
+    font-style: normal;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('../assets/fonts/atkinson-mono-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: 'Atkinson Hyperlegible Mono';
+    font-style: normal;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url('../assets/fonts/atkinson-mono-latin-ext.woff2') format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+    --font-ui: 'Atkinson Hyperlegible Next', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'Atkinson Hyperlegible Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+    /* surfaces */
+    --paper: #f3f0e8;
+    --panel: #faf8f3;
+    --sheet: #fffdf8;
+    --rule: #ddd6c7;
+    --rule-strong: #c4bba8;
+    --shade: rgba(30, 28, 25, 0.045);
+
+    /* ink */
+    --ink: #1e1c19;
+    --ink-2: #57524a;
+    --ink-3: #6f695e;       /* ≥ 4.5:1 on paper, panel and sheet (WCAG AA) */
+    --ink-inverse: #faf8f3;
+
+    /* signal colours = git states (same meaning everywhere) */
+    --wd: #a24c0c;          /* changed in the working directory, not staged */
+    --wd-soft: #f6e4d3;
+    --staged: #1b7040;      /* staged for the next commit */
+    --staged-soft: #dcefe2;
+    --repo: #2448a8;        /* committed history */
+    --repo-soft: #dde4f6;
+    --remote: #0e7180;      /* remote / origin */
+    --remote-soft: #d7eef0;
+    --danger: #b42318;      /* conflicts, data loss */
+    --danger-soft: #f8dcd8;
+    --sim: #6941c6;         /* simulated network – used for nothing else */
+    --sim-soft: #ebe4fa;
+    --real: #1e1c19;        /* real network */
+    --focus: #2448a8;
+    --success: #1b7040;
+
+    /* metro lines for branches (deliberately not the state colours) */
+    --line-0: #2448a8;
+    --line-1: #b3541e;
+    --line-2: #7e3f98;
+    --line-3: #0b7a99;
+    --line-4: #8a7a12;
+    --line-5: #5e6b2f;
+
+    /* terminal (a dark screen set into the paper) */
+    --term-bg: #16181d;
+    --term-fg: #e7e2d8;
+    --term-dim: #8f8a80;
+    --term-rule: #2a2e36;
+
+    --radius: 3px;
+    --gap: 12px;
+    --pane-pad: 14px;
+    --topbar-h: 48px;
+    --shadow-pop: 0 1px 0 rgba(30, 28, 25, 0.06), 0 8px 24px rgba(30, 28, 25, 0.12);
+    --hatch-sim: repeating-linear-gradient(135deg, var(--sim-soft) 0 6px, transparent 6px 12px);
+    color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+    --paper: #121417;
+    --panel: #181b20;
+    --sheet: #1d2127;
+    --rule: #2b3038;
+    --rule-strong: #3a414b;
+    --shade: rgba(255, 255, 255, 0.04);
+    --ink: #ebe6dc;
+    --ink-2: #b7b1a5;
+    --ink-3: #938d81;
+    --ink-inverse: #16181d;
+    --wd: #f0954f;
+    --wd-soft: #3a2a1c;
+    --staged: #5ccb8a;
+    --staged-soft: #1b3326;
+    --repo: #8aa8f5;
+    --repo-soft: #1f2a45;
+    --remote: #5fc4cf;
+    --remote-soft: #17353a;
+    --danger: #f2776b;
+    --danger-soft: #3d1f1c;
+    --sim: #b39cf6;
+    --sim-soft: #2b2342;
+    --real: #ebe6dc;
+    --focus: #8aa8f5;
+    --success: #5ccb8a;
+    --line-0: #7f9ff2;
+    --line-1: #e08752;
+    --line-2: #c08ad6;
+    --line-3: #4fb6d1;
+    --line-4: #d1bb48;
+    --line-5: #a5b764;
+    --term-bg: #0d0f12;
+    --term-rule: #22262d;
+    --shadow-pop: 0 1px 0 rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+}

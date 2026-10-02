@@ -1,0 +1,14 @@
+{
+  "name": "git-werkstatt-tests",
+  "private": true,
+  "type": "module",
+  "description": "Node tests for the shell, git engine and coach logic. The web app itself needs no build or npm.",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 *.test.mjs"
+  },
+  "devDependencies": {
+    "diff": "9.0.0",
+    "isomorphic-git": "1.42.5",
+    "memfs": "4.80.0"
+  }
+}

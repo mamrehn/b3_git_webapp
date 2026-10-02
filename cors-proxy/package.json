@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Cloudflare Worker (see DEPLOY.md). Marks worker.js as an ES module for Node-based tests.",
+  "type": "module"
+}

@@ -1,48 +1,51 @@
-# Deploying the CORS Proxy
+# Deploying the CORS proxy
 
-This directory contains a Cloudflare Worker that acts as a CORS proxy for `isomorphic-git`.
+Browsers may not talk to git servers directly, so in the **sandbox** every real
+`git clone/fetch/pull/push` goes through this Cloudflare Worker. (The missions never
+use it: their server is simulated in the browser.)
 
-## Prerequisites
+The worker forwards **only git smart-HTTP requests to known git hosts**. Everything else
+is refused, so it cannot be misused as an open proxy under your account – which would also
+use up the free daily request quota the students depend on.
 
-- Node.js installed
-- A Cloudflare account (Free tier is fine)
+## Deploy
 
-## Deployment Steps
+You need Node.js and a free Cloudflare account.
 
-1.  **Install Dependencies** (if needed, though `npx` works without checking node_modules):
-    ```bash
-    npm install
-    ```
+```bash
+cd cors-proxy
+npx wrangler login     # opens a browser window to sign in
+npx wrangler deploy    # prints the URL, e.g. https://isomorphic-git-cors-proxy.<you>.workers.dev
+```
 
-2.  **Login to Cloudflare**:
-    ```bash
-    npx wrangler login
-    ```
-    This will open a browser window to authenticate.
+## Settings (optional)
 
-3.  **Deploy the Worker**:
-    ```bash
-    npx wrangler deploy
-    ```
+Set them in `wrangler.toml` under `[vars]` or in the Cloudflare dashboard
+(Workers → your worker → Settings → Variables):
 
-4.  **Get the URL**:
-    After deployment, Wrangler will print a URL ending in `.workers.dev`.
-    Example: `https://isomorphic-git-cors-proxy.your-subdomain.workers.dev`
+| Variable | Meaning | Default |
+|---|---|---|
+| `ALLOWED_HOSTS` | git hosts the proxy talks to, comma-separated | `github.com,gitlab.com,codeberg.org,bitbucket.org` |
+| `ALLOWED_ORIGINS` | addresses of the Werkstatt that may use the proxy, e.g. `https://git.example-school.de` | any |
 
-## Update the Web App
+Set `ALLOWED_ORIGINS` once the Werkstatt has a fixed address.
 
-1.  Open `../app.js`.
-2.  Locate `const CORS_PROXIES` (around line 38).
-3.  Add your new Worker URL to the top of the list:
+## Connect the Werkstatt to your proxy
 
-    ```javascript
-    const CORS_PROXIES = [
-        'https://isomorphic-git-cors-proxy.your-subdomain.workers.dev', // <--- Your new URL (no trailing slash!)
-        'https://cors.isomorphic-git.org',
-    ];
-    ```
-4.  **Do NOT add a trailing slash** — isomorphic-git constructs URLs as `corsProxy + '/' + url`, so a trailing slash would create a double slash that breaks requests.
+Two places, both without a trailing slash:
 
-## Testing
+1. `src/config.js` → `corsProxies`: put your worker URL first.
+2. `index.html` → the `Content-Security-Policy` meta tag → add the URL to `connect-src`.
+   Otherwise the browser blocks every request to it.
 
-Run the web app and check the console or the connection status indicator. It should say "Online (proxy connected)" and default to your new, fast, private proxy.
+## Check that it works
+
+```bash
+P=https://isomorphic-git-cors-proxy.<you>.workers.dev
+curl -s -o /dev/null -w '%{http_code}\n' "$P/https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack"   # 200
+curl -s -o /dev/null -w '%{http_code}\n' "$P/https://example.com/"                                                          # 403
+```
+
+Then open the sandbox: on its first start it clones the practice project from GitHub.
+
+The worker has tests: `cd tests && node --test cors-proxy.test.mjs`.

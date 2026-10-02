@@ -1,0 +1,2 @@
+# no trailing slash: also matches a symlink to an install elsewhere
+tests/node_modules
