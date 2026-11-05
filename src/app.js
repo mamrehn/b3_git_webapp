@@ -28,6 +28,14 @@ import { SIM_ROOT, TEAM_ROOT } from './git/simserver.js';
 import { on } from './core/events.js';
 
 const THEME_KEY = 'gw.theme';
+// Color scheme preference, cycled by one button: automatic (follows the OS) → light → dark
+const THEME_ORDER = ['system', 'light', 'dark'];
+const THEME_ICON = { system: 'themeSystem', light: 'themeLight', dark: 'themeDark' };
+const THEME_LABEL = {
+    system: { de: 'automatisch', en: 'automatic' },
+    light: { de: 'hell', en: 'light' },
+    dark: { de: 'dunkel', en: 'dark' },
+};
 const SR_KEY = 'gw.screenreader';
 const WORLD_KEY = 'gw.world';
 const WELCOME_KEY = 'gw.welcomed';
@@ -63,7 +71,11 @@ export class App {
             de: h('button', { type: 'button', onclick: () => setLang('de') }, 'DE'),
             en: h('button', { type: 'button', onclick: () => setLang('en') }, 'EN'),
         };
-        this.themeBtn = h('button', { class: 'btn quiet icon-btn theme-btn', type: 'button', onclick: () => this.toggleTheme() });
+        this.themeBtn = h('button', { class: 'btn quiet icon-btn theme-btn', type: 'button', onclick: () => this.cycleTheme() });
+        // "automatic" keeps following the OS while the page is open
+        window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
+            if (this.themePreference() === 'system') this.applyTheme('system');
+        });
         this.helpBtn = h('button', { class: 'btn quiet icon-btn', type: 'button', onclick: () => this.showHelp() }, icon('help'));
         this.filesToggle = h('button', { class: 'btn quiet icon-btn files-toggle', type: 'button', onclick: () => this.root.querySelector('.app').classList.toggle('files-open') }, icon('sidebar'));
         const topbar = h('header', { class: 'topbar' },
@@ -182,22 +194,41 @@ export class App {
 
     // ---- theme ----------------------------------------------------------------------------------
 
+    // the resolved theme ('light' | 'dark') that the page shows
     theme() {
         return document.documentElement.dataset.theme || 'light';
     }
 
-    toggleTheme() {
-        const next = this.theme() === 'dark' ? 'light' : 'dark';
+    // the stored preference: 'system' (default) | 'light' | 'dark'
+    themePreference() {
+        try {
+            const stored = localStorage.getItem(THEME_KEY);
+            return stored === 'light' || stored === 'dark' ? stored : 'system';
+        } catch {
+            return 'system';
+        }
+    }
+
+    applyTheme(preference) {
+        const dark = preference === 'dark' || (preference === 'system' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
+        const next = dark ? 'dark' : 'light';
         document.documentElement.dataset.theme = next;
-        try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore */ }
         this.terminal?.setTheme(next);
         this.renderThemeBtn();
     }
 
-    renderThemeBtn() {
-        clear(this.themeBtn).appendChild(icon(this.theme() === 'dark' ? 'sun' : 'moon'));
-        this.themeBtn.title = this.theme() === 'dark' ? L({ de: 'Helles Design', en: 'Light theme' }) : L({ de: 'Dunkles Design', en: 'Dark theme' });
-        this.themeBtn.setAttribute('aria-label', this.themeBtn.title);
+    cycleTheme() {
+        const next = THEME_ORDER[(THEME_ORDER.indexOf(this.themePreference()) + 1) % THEME_ORDER.length];
+        try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore */ }
+        this.applyTheme(next);
+    }
+
+    // icon and title show the current mode; the accessible name says what the button does
+    renderThemeBtn(btn = this.themeBtn) {
+        const preference = this.themePreference();
+        clear(btn).appendChild(icon(THEME_ICON[preference]));
+        btn.title = L({ de: 'Farbschema: ', en: 'Color scheme: ' }) + L(THEME_LABEL[preference]);
+        btn.setAttribute('aria-label', L({ de: 'Farbschema wechseln', en: 'Change color scheme' }));
     }
 
     // ---- stage tabs ---------------------------------------------------------------------------------
@@ -630,11 +661,19 @@ export class App {
 
     showSettings() {
         const row = (label, ...controls) => h('div', { class: 'settings-row' }, h('span', {}, label), h('div', {}, ...controls));
+        // same cycle as the header button; stays open so all three modes can be tried
+        const themeRowBtn = h('button', { class: 'btn', type: 'button' });
+        const renderThemeRow = () => {
+            clear(themeRowBtn).append(icon(THEME_ICON[this.themePreference()]), h('span', {}, L(THEME_LABEL[this.themePreference()])));
+            themeRowBtn.setAttribute('aria-label', L({ de: 'Farbschema wechseln, jetzt ', en: 'Change color scheme, now ' }) + L(THEME_LABEL[this.themePreference()]));
+        };
+        themeRowBtn.addEventListener('click', () => { this.cycleTheme(); renderThemeRow(); });
+        renderThemeRow();
         const langBtn = code => h('button', { type: 'button', 'aria-pressed': String(lang() === code), onclick: () => { setLang(code); m.close(); this.showSettings(); } }, code.toUpperCase());
         const panel = h('div', { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'settings-title' },
             h('h2', { id: 'settings-title' }, L({ de: 'Einstellungen', en: 'Settings' })),
             row(L({ de: 'Sprache', en: 'Language' }), h('div', { class: 'lang-switch', role: 'group' }, langBtn('de'), langBtn('en'))),
-            row(L({ de: 'Design', en: 'Theme' }), h('button', { class: 'btn', type: 'button', onclick: () => { this.toggleTheme(); m.close(); } }, icon(this.theme() === 'dark' ? 'sun' : 'moon'), this.theme() === 'dark' ? L({ de: 'Hell', en: 'Light' }) : L({ de: 'Dunkel', en: 'Dark' }))),
+            row(L({ de: 'Farbschema', en: 'Color scheme' }), themeRowBtn),
             row(L({ de: 'Bildschirmleser', en: 'Screen reader' }), screenReaderToggle(this)),
             row(this.world?.id === 'mission' ? L({ de: 'Mission', en: 'Mission' }) : 'Sandbox', h('button', { class: 'btn', type: 'button', onclick: () => { m.close(); this.confirmReset(); } }, icon('reset'), this.world?.id === 'mission' ? L({ de: 'Neu starten', en: 'Restart' }) : L({ de: 'Zurücksetzen', en: 'Reset' }))),
             h('div', { class: 'dialog-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => m.close() }, L({ de: 'Fertig', en: 'Done' }))));
